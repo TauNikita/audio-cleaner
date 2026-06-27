@@ -121,15 +121,19 @@ want.
 uv sync --extra gpu
 
 # 3. ctranslate2 finds the pip-installed CUDA libraries via LD_LIBRARY_PATH:
-export LD_LIBRARY_PATH=$(uv run python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
+export LD_LIBRARY_PATH=$(uv run --extra gpu python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
 
 # 4. Run on the GPU (float16 is selected automatically on cuda):
-uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --device cuda
+uv run --extra gpu clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --device cuda
 ```
 
-`--device auto` (the default) will pick the GPU on its own once the libraries above are in place. If
-you hit a `cudnn`/`cublas` "library not found" error, the `LD_LIBRARY_PATH` export in step 3 is
-almost always the fix. For lower VRAM use try `--compute-type int8_float16`.
+**Use `uv run --extra gpu` every run.** Plain `uv run` re-syncs the environment to the default
+dependencies and removes the GPU libraries, so the next run would fail to find cuBLAS/cuDNN. Passing
+`--extra gpu` keeps them installed.
+
+`--device auto` (the default) picks the GPU on its own once the libraries are in place. If you hit a
+`cudnn`/`cublas` "library not found" error, the `LD_LIBRARY_PATH` export in step 3 is almost always
+the fix. For lower VRAM use `--compute-type int8_float16`.
 
 ### Setup (Windows)
 
@@ -142,10 +146,12 @@ R570+ must be installed first (verify with `nvidia-smi`).
 uv sync --extra gpu
 
 # 2. Run on the GPU (float16 is selected automatically on cuda):
-uv run clean.py "data\audio\Main.mp3" "data\script\Annexation of Crimea.txt" --device cuda
+uv run --extra gpu clean.py "data\audio\Main.mp3" "data\script\Annexation of Crimea.txt" --device cuda
 ```
 
-That's it — `--device auto` (the default) also picks the GPU once `--extra gpu` is installed.
+**Use `uv run --extra gpu` every run.** Plain `uv run` re-syncs to the default dependencies and
+removes the GPU libraries, so the next run would fail to find cuBLAS/cuDNN. Passing `--extra gpu`
+keeps them installed. `--device auto` (the default) also picks the GPU once they're present.
 
 If you still hit a `cublas`/`cudnn` "not found" error, the alternative is Purfview's prebuilt
 NVIDIA libraries (https://github.com/Purfview/whisper-standalone-win, "CUDA libs"): unzip and put
