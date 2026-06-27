@@ -111,6 +111,11 @@ def _register_cuda_dll_dirs() -> None:
     site-packages\\nvidia\\<lib>\\bin, which isn't on the DLL search path, so ctranslate2 can't find
     cublas64_12.dll / cudnn*_9.dll. Registering those directories makes `uv sync --extra gpu` enough
     to run on the GPU with no manual PATH edits. No-op off Windows (Linux uses LD_LIBRARY_PATH).
+
+    Both os.add_dll_directory and a PATH prepend are needed: Python's own loader honors
+    add_dll_directory, but ctranslate2's native loader calls LoadLibrary with default search flags
+    that ignore it and only consult PATH. Without the PATH entry the model constructs fine but the
+    first GPU op dies with "cublas64_12.dll ... cannot be loaded".
     """
     if platform.system() != "Windows":
         return
@@ -131,6 +136,8 @@ def _register_cuda_dll_dirs() -> None:
                         os.add_dll_directory(lib_dir)
                     except OSError:
                         pass
+                    if lib_dir not in os.environ.get("PATH", "").split(os.pathsep):
+                        os.environ["PATH"] = lib_dir + os.pathsep + os.environ.get("PATH", "")
 
 
 def _cuda_lib_hint() -> str:
