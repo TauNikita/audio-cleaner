@@ -17,6 +17,11 @@ from .util import Progress, fmt_ts
 # sound abruptly spliced where dead air / a flubbed retake was cut out.
 _GAP_PAUSE_MS = 200
 
+# Whisper's word-end timestamp marks where a word's energy mostly ends, clipping the natural release.
+# At a sentence's true end we fade out over a longer window than the click-killing crossfade so the
+# voice tapers naturally into the pause instead of stopping abruptly.
+_END_FADE_MS = 150
+
 
 def _split_runs(words: list[Word], w_start: int, w_end: int,
                 max_gap_s: float) -> list[tuple[float, float]]:
@@ -53,7 +58,7 @@ def _load_pydub():
 
 
 def assemble(media: str, decisions: list[Decision], words: list[Word], output: str,
-             pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
+             pad_ms: int, tail_pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
              crossfade_ms: int, max_internal_gap_ms: int) -> None:
     """Render the kept spans to `output`. Format is inferred from the extension.
 
@@ -62,7 +67,9 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
     in seconds, so they index the original media just as well.
 
     Each span is cut from its temporally-contiguous runs (see _split_runs), excising internal gaps
-    longer than max_internal_gap_ms so dead air and dropped retakes don't end up in the output.
+    longer than max_internal_gap_ms so dead air and dropped retakes don't end up in the output. The
+    lead edge gets pad_ms; the sentence's true end gets the larger tail_pad_ms plus a longer fade so
+    the natural decay isn't clipped.
     """
     AudioSegment = _load_pydub()
     max_gap_s = max_internal_gap_ms / 1000.0
@@ -78,18 +85,33 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
     progress = Progress("Assemble")
     result = AudioSegment.empty()
     for i, d in enumerate(kept):
-        # Build the span from its contiguous runs, dropping large internal gaps. Pad only the outer
-        # edges; fade every run edge so the internal splices don't click.
+        # Don't let a padded sentence end bleed into the next sentence's (also lead-padded) start.
+        next_start_ms = (int(round(kept[i + 1].start * 1000)) - pad_ms
+                         if i + 1 < len(kept) else total_ms)
+
+        # Build the span from its contiguous runs, dropping large internal gaps. The lead edge gets
+        # pad_ms; the sentence's true end gets the larger tail_pad_ms and a longer fade so the natural
+        # decay tapers instead of stopping abruptly. Internal splice edges get only the anti-click
+        # crossfade.
         runs = _split_runs(words, d.word_start, d.word_end, max_gap_s)
         clip = AudioSegment.empty()
         for r, (run_start, run_end) in enumerate(runs):
+            is_last = r == len(runs) - 1
+            run_end_ms = int(round(run_end * 1000))
             start = int(round(run_start * 1000)) - (pad_ms if r == 0 else 0)
-            end = int(round(run_end * 1000)) + (pad_ms if r == len(runs) - 1 else 0)
+            if is_last:
+                end = min(run_end_ms + tail_pad_ms, max(run_end_ms, next_start_ms))
+            else:
+                end = run_end_ms
             sub = audio[max(0, start):min(total_ms, end)]
 
-            fade = min(crossfade_ms, len(sub) // 2)
-            if fade > 0:
-                sub = sub.fade_in(fade).fade_out(fade)
+            half = len(sub) // 2
+            fade_in = min(crossfade_ms, half)
+            fade_out = min(_END_FADE_MS if is_last else crossfade_ms, half)
+            if fade_in > 0:
+                sub = sub.fade_in(fade_in)
+            if fade_out > 0:
+                sub = sub.fade_out(fade_out)
 
             if r > 0 and _GAP_PAUSE_MS > 0:
                 gap_pause = AudioSegment.silent(duration=_GAP_PAUSE_MS, frame_rate=frame_rate)

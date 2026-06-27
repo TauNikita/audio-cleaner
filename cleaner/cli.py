@@ -44,6 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("assembly (ms)")
     g.add_argument("--pad", type=int, default=60, help="padding added to each cut edge (default: 60)")
+    g.add_argument("--tail-pad", type=int, default=180,
+                   help="extra padding kept at a sentence's end so the natural decay isn't clipped "
+                        "(default: 180)")
     g.add_argument("--sentence-pause", type=int, default=350,
                    help="silence between sentences (default: 350)")
     g.add_argument("--paragraph-pause", type=int, default=900,
@@ -126,8 +129,9 @@ def main(argv: list[str] | None = None) -> int:
 
         from .assemble import assemble
         assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
-                 sentence_pause_ms=args.sentence_pause, paragraph_pause_ms=args.paragraph_pause,
-                 crossfade_ms=args.crossfade, max_internal_gap_ms=args.max_internal_gap)
+                 tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
+                 paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
+                 max_internal_gap_ms=args.max_internal_gap)
         return 0
 
     except (DependencyError, ImportError) as exc:
