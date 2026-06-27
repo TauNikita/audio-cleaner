@@ -50,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="silence between paragraphs (default: 900)")
     g.add_argument("--crossfade", type=int, default=15,
                    help="fade at each cut edge to avoid clicks (default: 15)")
+    g.add_argument("--max-internal-gap", type=int, default=1200,
+                   help="excise silence/retake audio inside a matched span when the gap between "
+                        "consecutive words exceeds this (default: 1200)")
     return p
 
 
@@ -122,9 +125,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         from .assemble import assemble
-        assemble(args.media, decisions, args.output, pad_ms=args.pad,
+        assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
                  sentence_pause_ms=args.sentence_pause, paragraph_pause_ms=args.paragraph_pause,
-                 crossfade_ms=args.crossfade)
+                 crossfade_ms=args.crossfade, max_internal_gap_ms=args.max_internal_gap)
         return 0
 
     except (DependencyError, ImportError) as exc:

@@ -2,13 +2,44 @@
 
 Each kept span is padded slightly so word edges aren't clipped, given a short fade at both ends so
 the cuts don't click, and separated by a short silence between sentences / a longer one between
-paragraphs.
+paragraphs. Large time gaps *inside* a span are excised (see _split_runs) so dead air and dropped
+retakes don't make it into the output.
 """
 
 import os
 
 from .align import Decision, LOW, MATCH
+from .transcribe import Word
 from .util import Progress, fmt_ts
+
+
+# A short, controlled pause that replaces each excised internal gap, so a stitched span doesn't
+# sound abruptly spliced where dead air / a flubbed retake was cut out.
+_GAP_PAUSE_MS = 200
+
+
+def _split_runs(words: list[Word], w_start: int, w_end: int,
+                max_gap_s: float) -> list[tuple[float, float]]:
+    """Split a kept word span into temporally-contiguous runs of (start, end) seconds.
+
+    Whisper's chosen words are contiguous by index but not always by time: when vad_filter drops a
+    flubbed retake, a few stray words straddle it with a large time gap. Cutting [first.start,
+    last.end] as one block would re-include that retake / dead audio — the source of output repeats —
+    so we break the span wherever the gap between consecutive words exceeds max_gap_s and drop the
+    gap. (A single word with a stretched timestamp spanning the gap is a residual case this doesn't
+    fully catch.)
+    """
+    runs: list[tuple[float, float]] = []
+    run_start = words[w_start].start
+    prev_end = words[w_start].end
+    for wi in range(w_start + 1, w_end):
+        w = words[wi]
+        if w.start - prev_end > max_gap_s:
+            runs.append((run_start, prev_end))
+            run_start = w.start
+        prev_end = w.end
+    runs.append((run_start, prev_end))
+    return runs
 
 
 def _load_pydub():
@@ -21,16 +52,20 @@ def _load_pydub():
     return AudioSegment
 
 
-def assemble(media: str, decisions: list[Decision], output: str,
+def assemble(media: str, decisions: list[Decision], words: list[Word], output: str,
              pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
-             crossfade_ms: int) -> None:
+             crossfade_ms: int, max_internal_gap_ms: int) -> None:
     """Render the kept spans to `output`. Format is inferred from the extension.
 
     Spans are cut from the original recording, not the bandwidth-limited 16kHz mono WAV used for
     transcription, so the output keeps the source sample rate and channels. Whisper's timestamps are
     in seconds, so they index the original media just as well.
+
+    Each span is cut from its temporally-contiguous runs (see _split_runs), excising internal gaps
+    longer than max_internal_gap_ms so dead air and dropped retakes don't end up in the output.
     """
     AudioSegment = _load_pydub()
+    max_gap_s = max_internal_gap_ms / 1000.0
     # Decode the original media so cuts keep full fidelity; let pydub/ffmpeg detect the format.
     audio = AudioSegment.from_file(media)
     frame_rate = audio.frame_rate
@@ -43,13 +78,23 @@ def assemble(media: str, decisions: list[Decision], output: str,
     progress = Progress("Assemble")
     result = AudioSegment.empty()
     for i, d in enumerate(kept):
-        start = max(0, int(round(d.start * 1000)) - pad_ms)
-        end = min(total_ms, int(round(d.end * 1000)) + pad_ms)
-        clip = audio[start:end]
+        # Build the span from its contiguous runs, dropping large internal gaps. Pad only the outer
+        # edges; fade every run edge so the internal splices don't click.
+        runs = _split_runs(words, d.word_start, d.word_end, max_gap_s)
+        clip = AudioSegment.empty()
+        for r, (run_start, run_end) in enumerate(runs):
+            start = int(round(run_start * 1000)) - (pad_ms if r == 0 else 0)
+            end = int(round(run_end * 1000)) + (pad_ms if r == len(runs) - 1 else 0)
+            sub = audio[max(0, start):min(total_ms, end)]
 
-        fade = min(crossfade_ms, len(clip) // 2)
-        if fade > 0:
-            clip = clip.fade_in(fade).fade_out(fade)
+            fade = min(crossfade_ms, len(sub) // 2)
+            if fade > 0:
+                sub = sub.fade_in(fade).fade_out(fade)
+
+            if r > 0 and _GAP_PAUSE_MS > 0:
+                gap_pause = AudioSegment.silent(duration=_GAP_PAUSE_MS, frame_rate=frame_rate)
+                clip += gap_pause.set_channels(audio.channels)
+            clip += sub
 
         if i > 0:
             prev = kept[i - 1]
