@@ -5,8 +5,10 @@ tries to dial in. Caching the word list keyed on the media file + model means yo
 and every later dry-run is instant. `--refresh` forces a re-transcribe.
 """
 
+import importlib
 import json
 import os
+import platform
 import re
 from dataclasses import asdict, dataclass
 
@@ -102,7 +104,48 @@ def save_cache(cache_path: str, media: str, model: str, language: str, words: li
     os.replace(tmp, cache_path)
 
 
+def _register_cuda_dll_dirs() -> None:
+    """On Windows, make the pip-installed CUDA DLLs loadable by ctranslate2.
+
+    The nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels drop their DLLs in
+    site-packages\\nvidia\\<lib>\\bin, which isn't on the DLL search path, so ctranslate2 can't find
+    cublas64_12.dll / cudnn*_9.dll. Registering those directories makes `uv sync --extra gpu` enough
+    to run on the GPU with no manual PATH edits. No-op off Windows (Linux uses LD_LIBRARY_PATH).
+    """
+    if platform.system() != "Windows":
+        return
+    for pkg in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            mod = importlib.import_module(pkg)
+        except ImportError:
+            continue
+        base = os.path.dirname(mod.__file__)
+        for sub in ("bin", "lib"):
+            lib_dir = os.path.join(base, sub)
+            if os.path.isdir(lib_dir):
+                try:
+                    os.add_dll_directory(lib_dir)
+                except OSError:
+                    pass
+
+
+def _cuda_lib_hint() -> str:
+    if platform.system() == "Windows":
+        return ("Install the GPU libraries with:  uv sync --extra gpu\n"
+                "  (the tool then loads cuBLAS/cuDNN automatically — see the README GPU section).\n"
+                "  Or run on the processor with:  --device cpu")
+    return ("Install the GPU libraries with:  uv sync --extra gpu  and set LD_LIBRARY_PATH\n"
+            "  (see the README GPU section). Or run on the processor with:  --device cpu")
+
+
+def _is_cuda_lib_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in ("cudnn", "cublas", "cuda", "libcu", "cublas64"))
+
+
 def _load_model(model: str, device: str, compute_type: str):
+    if device == "cuda":
+        _register_cuda_dll_dirs()  # before importing ctranslate2, in case it links CUDA at import
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -113,12 +156,9 @@ def _load_model(model: str, device: str, compute_type: str):
     try:
         return WhisperModel(model, device=device, compute_type=compute_type)
     except RuntimeError as exc:
-        msg = str(exc).lower()
-        if device == "cuda" and any(k in msg for k in ("cudnn", "cublas", "cuda", "libcu")):
+        if device == "cuda" and _is_cuda_lib_error(exc):
             raise DependencyError(
-                f"Failed to start the model on the GPU: {exc}\n"
-                "This usually means the CUDA libraries are missing or mismatched. Install the\n"
-                "matching cuBLAS/cuDNN (see the README GPU section) or fall back with --device cpu."
+                f"Failed to start the model on the GPU: {exc}\n{_cuda_lib_hint()}"
             ) from exc
         raise
 
@@ -144,19 +184,28 @@ def transcribe_words(
     total = getattr(info, "duration", None)
 
     words: list[Word] = []
-    for segment in segments:  # generator: work happens as we iterate
-        for w in segment.words or []:
-            norm = normalize(w.word)
-            if not norm:
-                continue  # punctuation-only token, nothing to match against
-            words.append(Word(raw=w.word.strip(), start=float(w.start),
-                              end=float(w.end), norm=norm))
-        if total:
-            pct = min(100.0, segment.end / total * 100)
-            progress.update(f"{pct:5.1f}%  {fmt_ts(segment.end)} / {fmt_ts(total)} "
-                            f"— {len(words)} words")
-        else:
-            progress.update(f"{fmt_ts(segment.end)} — {len(words)} words")
+    try:
+        for segment in segments:  # generator: GPU compute happens lazily as we iterate
+            for w in segment.words or []:
+                norm = normalize(w.word)
+                if not norm:
+                    continue  # punctuation-only token, nothing to match against
+                words.append(Word(raw=w.word.strip(), start=float(w.start),
+                                  end=float(w.end), norm=norm))
+            if total:
+                pct = min(100.0, segment.end / total * 100)
+                progress.update(f"{pct:5.1f}%  {fmt_ts(segment.end)} / {fmt_ts(total)} "
+                                f"— {len(words)} words")
+            else:
+                progress.update(f"{fmt_ts(segment.end)} — {len(words)} words")
+    except RuntimeError as exc:
+        # CUDA libraries (cuBLAS/cuDNN) are loaded lazily on the first GPU op, so a missing-library
+        # error often lands here rather than at model construction.
+        if device == "cuda" and _is_cuda_lib_error(exc):
+            raise DependencyError(
+                f"GPU transcription failed: {exc}\n{_cuda_lib_hint()}"
+            ) from exc
+        raise
 
     progress.done(f"done — {len(words)} words")
     return words

@@ -41,8 +41,13 @@ winget install Gyan.FFmpeg
 # or:  scoop install ffmpeg
 ```
 
-After installing on Windows, open a **new** terminal so `ffmpeg` is on `PATH` (check with
-`ffmpeg -version`).
+After installing on Windows, `ffmpeg` won't be visible in the **current** terminal until `PATH`
+refreshes. Either open a new terminal, or reload `PATH` in place:
+
+```powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+ffmpeg -version    # should print a version
+```
 
 ### 2. Install uv
 
@@ -128,26 +133,27 @@ almost always the fix. For lower VRAM use try `--compute-type int8_float16`.
 
 ### Setup (Windows)
 
-The pip `gpu` extra is Linux-oriented, so on Windows supply the CUDA libraries another way. NVIDIA
-driver R570+ must be installed first (verify with `nvidia-smi`).
+The `gpu` extra has Windows wheels for cuBLAS + cuDNN 9, and the tool registers their DLL folders
+automatically — so the pip/uv path works the same as on Linux, no manual PATH edits. NVIDIA driver
+R570+ must be installed first (verify with `nvidia-smi`).
 
 ```powershell
-# 1. Install the base project:
-uv sync
+# 1. Install the project plus the GPU runtime libraries (cuBLAS + cuDNN 9):
+uv sync --extra gpu
 
-# 2. Provide the cuBLAS + cuDNN 9 DLLs (pick one):
-#    a) Easiest: download Purfview's prebuilt NVIDIA libraries for Windows
-#       (https://github.com/Purfview/whisper-standalone-win, "CUDA libs"),
-#       unzip, and put the DLLs on PATH or in the repo folder next to clean.py.
-#    b) Or install the CUDA Toolkit 12.8+ and cuDNN 9, then add their bin\ dirs to PATH.
-
-# 3. Run on the GPU (float16 is selected automatically on cuda):
+# 2. Run on the GPU (float16 is selected automatically on cuda):
 uv run clean.py "data\audio\Main.mp3" "data\script\Annexation of Crimea.txt" --device cuda
 ```
 
-`ctranslate2` loads the DLLs from `PATH` on Windows (there is no `LD_LIBRARY_PATH`). If you get a
-`cublas`/`cudnn` "not found" error, the DLLs aren't on `PATH` — recheck step 2. For lower VRAM use
-`--compute-type int8_float16`.
+That's it — `--device auto` (the default) also picks the GPU once `--extra gpu` is installed.
+
+If you still hit a `cublas`/`cudnn` "not found" error, the alternative is Purfview's prebuilt
+NVIDIA libraries (https://github.com/Purfview/whisper-standalone-win, "CUDA libs"): unzip and put
+the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int8_float16`.
+
+> A harmless `huggingface_hub` symlink warning may appear on first run (model download). To silence
+> it, enable Windows Developer Mode or set `HF_HUB_DISABLE_SYMLINKS_WARNING=1`. It does not affect
+> results.
 
 ## Options
 
