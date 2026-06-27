@@ -119,14 +119,18 @@ def _register_cuda_dll_dirs() -> None:
             mod = importlib.import_module(pkg)
         except ImportError:
             continue
-        base = os.path.dirname(mod.__file__)
-        for sub in ("bin", "lib"):
-            lib_dir = os.path.join(base, sub)
-            if os.path.isdir(lib_dir):
-                try:
-                    os.add_dll_directory(lib_dir)
-                except OSError:
-                    pass
+        # These are namespace packages, so __file__ is None — use __path__ for the directory.
+        bases = list(getattr(mod, "__path__", []) or [])
+        if getattr(mod, "__file__", None):
+            bases.append(os.path.dirname(mod.__file__))
+        for base in bases:
+            for sub in ("bin", "lib"):
+                lib_dir = os.path.join(base, sub)
+                if os.path.isdir(lib_dir):
+                    try:
+                        os.add_dll_directory(lib_dir)
+                    except OSError:
+                        pass
 
 
 def _cuda_lib_hint() -> str:
