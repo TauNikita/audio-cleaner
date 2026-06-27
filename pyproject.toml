@@ -1,0 +1,26 @@
+[project]
+name = "audio-cleaner"
+version = "0.1.0"
+description = "Clean a messy voiceover so it follows a written script, keeping the last good take of each sentence."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.2",
+    "rapidfuzz>=3.0",
+    "pydub>=0.25",
+]
+
+# NVIDIA GPU (CUDA 12) runtime libraries — cuBLAS + cuDNN 9, which ctranslate2 loads for GPU
+# inference. Required for Blackwell / RTX 50-series (incl. RTX 5070). Linux only.
+# Install with: uv sync --extra gpu
+[project.optional-dependencies]
+gpu = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12==9.*",
+]
+
+[tool.uv]
+# This is an application, not a library: install the dependencies into .venv but don't try to build
+# and install the project itself. `uv run clean.py` puts the repo root on sys.path so `import
+# cleaner` resolves.
+package = false

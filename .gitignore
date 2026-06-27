@@ -10,5 +10,8 @@ clean.wav
 *.out.wav
 *.out.mp3
 
+# Run logs
+run.log
+
 # Large media lives under data/ and is not versioned
 data/audio/

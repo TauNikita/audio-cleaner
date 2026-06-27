@@ -21,34 +21,90 @@ script.txt ──► sentences ──► align each sentence to its last retake
                           cut + concat with pauses ──► clean.wav
 ```
 
-## Requirements
+## From scratch on a new machine
 
-- **ffmpeg** on the system: `sudo apt install ffmpeg`
-- Python deps (in a virtualenv, since system Python is usually locked down):
+This project uses [uv](https://docs.astral.sh/uv/) to manage the Python environment.
+
+### 1. Install ffmpeg (system package)
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+# Debian / Ubuntu
+sudo apt install ffmpeg
+# macOS (Homebrew)
+brew install ffmpeg
 ```
 
-## Usage
+### 2. Install uv
 
-Always run inside the venv (e.g. `.venv/bin/python` or after `source .venv/bin/activate`).
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# then restart the shell, or:  export PATH="$HOME/.local/bin:$PATH"
+```
+
+### 3. Get the code and create the environment
+
+```bash
+git clone <repo-url> audio-cleaner
+cd audio-cleaner
+uv sync                 # creates .venv and installs dependencies from pyproject.toml / uv.lock
+```
+
+`uv` reads `pyproject.toml`, creates `.venv`, and installs everything. No manual venv or
+`pip install` needed. `uv sync` is reproducible from the committed `uv.lock`.
+
+### 4. Run it
+
+`uv run` executes inside the managed environment (no need to activate anything).
 
 Review the picks first — this writes **no audio**:
 
 ```bash
-.venv/bin/python clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --dry-run
+uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --dry-run
 ```
 
 When the report looks right, render:
 
 ```bash
-.venv/bin/python clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" -o clean.wav
+uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" -o clean.wav
 ```
 
 The transcript is cached next to the media (`*.words.json`), so re-running the dry-run while you
 tune `--threshold` is instant. Use `--refresh` to force re-transcription.
+
+> Prefer plain pip? `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then run
+> with `.venv/bin/python clean.py ...`. The uv path above is recommended.
+
+## GPU acceleration (NVIDIA, incl. RTX 50-series / RTX 5070)
+
+By default `--device auto` uses the GPU when one is visible and falls back to CPU otherwise. On CPU,
+transcription runs at roughly real time; a GPU is dramatically faster.
+
+faster-whisper runs on [CTranslate2](https://github.com/OpenNMT/CTranslate2) (not PyTorch), so GPU
+use only needs the NVIDIA driver plus the CUDA 12 cuBLAS / cuDNN 9 runtime libraries.
+
+**Blackwell / RTX 50-series notes (RTX 5070, 5080, 5090):** these are compute capability `sm_120`
+and need a **CUDA 12.8+ driver (R570 or newer)** — check with `nvidia-smi`. The bundled
+`ctranslate2` (>= 4.5, this project uses 4.8) targets CUDA 12 + cuDNN 9, which is what these cards
+want.
+
+### Setup (Linux)
+
+```bash
+# 1. NVIDIA driver R570+ must already be installed (verify: nvidia-smi)
+
+# 2. Install the project plus the GPU runtime libraries (cuBLAS + cuDNN 9):
+uv sync --extra gpu
+
+# 3. ctranslate2 finds the pip-installed CUDA libraries via LD_LIBRARY_PATH:
+export LD_LIBRARY_PATH=$(uv run python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
+
+# 4. Run on the GPU (float16 is selected automatically on cuda):
+uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --device cuda
+```
+
+`--device auto` (the default) will pick the GPU on its own once the libraries above are in place. If
+you hit a `cudnn`/`cublas` "library not found" error, the `LD_LIBRARY_PATH` export in step 3 is
+almost always the fix. For lower VRAM use try `--compute-type int8_float16`.
 
 ## Options
 
@@ -58,8 +114,8 @@ tune `--threshold` is instant. Use `--refresh` to force re-transcription.
 | `--dry-run` | off | Align and print the report, write no audio |
 | `--model` | `small.en` | faster-whisper model |
 | `--language` | `en` | Spoken language |
-| `--device` | `cpu` | `cpu` or `cuda` |
-| `--compute-type` | `int8` | ctranslate2 compute type |
+| `--device` | `auto` | `auto` (GPU if available, else CPU), `cpu`, or `cuda` |
+| `--compute-type` | auto | ctranslate2 compute type (float16 on GPU, int8 on CPU) |
 | `--threshold` | `82` | Min fuzzy match score (0-100) to accept a take |
 | `--max-extra` | `3` | Extra words to try beyond sentence length when matching |
 | `--horizon` | unlimited | Max words to scan ahead per sentence |
