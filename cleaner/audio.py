@@ -1,7 +1,8 @@
 """Audio extraction via ffmpeg.
 
-Both transcription and cutting reference the exact same 16kHz mono WAV, so timestamps from Whisper
-line up precisely with the samples we later slice.
+The 16kHz mono WAV is only for Whisper. Cutting happens against the original recording (see
+assemble.py) to keep full fidelity — Whisper's timestamps are in seconds, so they index the original
+media just as well.
 """
 
 import os

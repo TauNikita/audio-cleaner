@@ -84,11 +84,12 @@ def main(argv: list[str] | None = None) -> int:
 
     cache_path = args.cache or tr.default_cache_path(args.media, args.model)
 
-    # Extract the WAV only when we truly need it: a re-transcribe (cache miss or --refresh), or a
-    # real render. A dry-run with a warm cache touches neither ffmpeg nor Whisper.
+    # The 16kHz WAV exists only to feed Whisper; rendering cuts from the original media. So extract
+    # it only for a re-transcribe (cache miss or --refresh); a warm cache touches neither ffmpeg nor
+    # Whisper, even on a full render.
     need_transcribe = args.refresh or tr.load_cache(
         cache_path, args.media, args.model, args.language) is None
-    need_wav = need_transcribe or not args.dry_run
+    need_wav = need_transcribe
 
     wav_path = None
     is_temp_wav = False
@@ -121,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         from .assemble import assemble
-        assemble(wav_path, decisions, args.output, pad_ms=args.pad,
+        assemble(args.media, decisions, args.output, pad_ms=args.pad,
                  sentence_pause_ms=args.sentence_pause, paragraph_pause_ms=args.paragraph_pause,
                  crossfade_ms=args.crossfade)
         return 0

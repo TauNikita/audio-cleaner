@@ -21,13 +21,18 @@ def _load_pydub():
     return AudioSegment
 
 
-def assemble(wav_path: str, decisions: list[Decision], output: str,
+def assemble(media: str, decisions: list[Decision], output: str,
              pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
              crossfade_ms: int) -> None:
-    """Render the kept spans to `output`. Format is inferred from the extension."""
+    """Render the kept spans to `output`. Format is inferred from the extension.
+
+    Spans are cut from the original recording, not the bandwidth-limited 16kHz mono WAV used for
+    transcription, so the output keeps the source sample rate and channels. Whisper's timestamps are
+    in seconds, so they index the original media just as well.
+    """
     AudioSegment = _load_pydub()
-    # The input is always the 16kHz mono WAV produced by extraction, so read it natively (no ffmpeg).
-    audio = AudioSegment.from_file(wav_path, format="wav")
+    # Decode the original media so cuts keep full fidelity; let pydub/ffmpeg detect the format.
+    audio = AudioSegment.from_file(media)
     frame_rate = audio.frame_rate
     total_ms = len(audio)
 
@@ -50,7 +55,8 @@ def assemble(wav_path: str, decisions: list[Decision], output: str,
             prev = kept[i - 1]
             pause = paragraph_pause_ms if prev.sentence.paragraph_end else sentence_pause_ms
             if pause > 0:
-                result += AudioSegment.silent(duration=pause, frame_rate=frame_rate)
+                silence = AudioSegment.silent(duration=pause, frame_rate=frame_rate)
+                result += silence.set_channels(audio.channels)
 
         result += clip
         progress.update(f"{i + 1}/{len(kept)} spans — output {fmt_ts(len(result) / 1000)}")
