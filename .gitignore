@@ -13,5 +13,8 @@ clean.wav
 # Run logs
 run.log
 
-# Large media lives under data/ and is not versioned
-data/audio/
+# Stray nested clone of the remote (created accidentally; not part of this repo)
+/audio-cleaner/
+
+# Sample inputs (recordings + scripts) are not versioned
+data/
