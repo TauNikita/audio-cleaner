@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Transcript caches (regenerated from media)
+*.words.json
+
+# Rendered output
+clean.wav
+*.out.wav
+*.out.mp3
+
+# Large media lives under data/ and is not versioned
+data/audio/
