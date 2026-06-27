@@ -26,8 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("transcription")
     g.add_argument("--model", default="small.en", help="faster-whisper model (default: small.en)")
     g.add_argument("--language", default="en", help="spoken language (default: en)")
-    g.add_argument("--device", default="cpu", help="cpu or cuda (default: cpu)")
-    g.add_argument("--compute-type", default="int8", help="ctranslate2 compute type (default: int8)")
+    g.add_argument("--device", default="auto",
+                   help="auto, cpu, or cuda (default: auto — GPU when available, else CPU)")
+    g.add_argument("--compute-type", default=None,
+                   help="ctranslate2 compute type, e.g. int8, float16, int8_float16 "
+                        "(default: float16 on GPU, int8 on CPU)")
     g.add_argument("--cache", default=None, help="transcript cache path (default: next to media)")
     g.add_argument("--refresh", action="store_true", help="ignore the cache and re-transcribe")
 
@@ -90,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     wav_path = None
     is_temp_wav = False
     try:
+        # Resolve device/compute only when a transcribe is actually on the table.
+        if need_transcribe:
+            args.device, args.compute_type = tr.resolve_device(args.device, args.compute_type)
+            print(f"Device: {args.device} / {args.compute_type}")
+
         if need_wav:
             from .audio import extract_wav
             wav_path = extract_wav(args.media)

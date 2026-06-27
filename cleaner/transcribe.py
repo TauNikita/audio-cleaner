@@ -10,10 +10,49 @@ import os
 import re
 from dataclasses import asdict, dataclass
 
+from .audio import DependencyError
 from .text import normalize
 from .util import Progress, fmt_ts
 
 CACHE_VERSION = 1
+
+
+def cuda_device_count() -> int:
+    """Number of CUDA devices ctranslate2 can see (0 if none / not a CUDA build)."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count()
+    except Exception:
+        return 0
+
+
+def resolve_device(device: str, compute_type: str | None) -> tuple[str, str]:
+    """Resolve the requested device and pick a compute type to match.
+
+    - "auto": use the GPU when one is visible, otherwise fall back to CPU.
+    - "cuda": require a visible GPU; fail loudly with a hint if there isn't one.
+    - "cpu": as asked.
+
+    When --compute-type isn't given we default to float16 on GPU and int8 on CPU.
+    """
+    device = (device or "auto").lower()
+    count = cuda_device_count()
+
+    if device == "auto":
+        device = "cuda" if count > 0 else "cpu"
+        if device == "cpu":
+            print("Device: no CUDA GPU detected, using cpu.")
+    elif device == "cuda" and count == 0:
+        raise DependencyError(
+            "CUDA was requested (--device cuda) but no usable GPU was detected.\n"
+            "Check that the NVIDIA driver is installed (run `nvidia-smi`) and that ctranslate2\n"
+            "has CUDA support plus the cuBLAS/cuDNN libraries (see the GPU section of the README).\n"
+            "Use --device cpu to run on the processor instead."
+        )
+
+    if not compute_type:
+        compute_type = "float16" if device == "cuda" else "int8"
+    return device, compute_type
 
 
 @dataclass
@@ -71,7 +110,17 @@ def _load_model(model: str, device: str, compute_type: str):
             "faster-whisper is not installed. Install it with:\n"
             "  pip install faster-whisper"
         ) from exc
-    return WhisperModel(model, device=device, compute_type=compute_type)
+    try:
+        return WhisperModel(model, device=device, compute_type=compute_type)
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if device == "cuda" and any(k in msg for k in ("cudnn", "cublas", "cuda", "libcu")):
+            raise DependencyError(
+                f"Failed to start the model on the GPU: {exc}\n"
+                "This usually means the CUDA libraries are missing or mismatched. Install the\n"
+                "matching cuBLAS/cuDNN (see the README GPU section) or fall back with --device cpu."
+            ) from exc
+        raise
 
 
 def transcribe_words(

@@ -1,0 +1,7 @@
+# NVIDIA GPU (CUDA 12) extras — install on top of requirements.txt, Linux only.
+# These provide the cuBLAS + cuDNN 9 runtime libraries that ctranslate2 loads for GPU inference.
+#
+# Required for Blackwell / RTX 50-series cards (including the RTX 5070), which need a CUDA 12.8+
+# driver (R570 or newer). ctranslate2 >= 4.5 (we use 4.8) targets CUDA 12 + cuDNN 9.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
