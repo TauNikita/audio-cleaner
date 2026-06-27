@@ -5,6 +5,7 @@ line up precisely with the samples we later slice.
 """
 
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -17,10 +18,21 @@ class DependencyError(RuntimeError):
     """Raised when an external tool (ffmpeg) is missing, with an install hint."""
 
 
+def _ffmpeg_install_hint() -> str:
+    system = platform.system()
+    if system == "Windows":
+        return ("winget install Gyan.FFmpeg   (then open a NEW terminal so it lands on PATH)\n"
+                "  or:  choco install ffmpeg   /   scoop install ffmpeg")
+    if system == "Darwin":
+        return "brew install ffmpeg"
+    return "sudo apt install ffmpeg"
+
+
 def ensure_ffmpeg() -> None:
     if shutil.which("ffmpeg") is None:
         raise DependencyError(
-            "ffmpeg not found. Install it with:\n  sudo apt install ffmpeg"
+            f"ffmpeg not found on PATH. Install it with:\n  {_ffmpeg_install_hint()}\n"
+            "If you just installed it, open a new terminal (PATH changes don't reach the current one)."
         )
 
 
