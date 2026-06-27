@@ -8,6 +8,9 @@ dependencies = [
     "faster-whisper>=1.2",
     "rapidfuzz>=3.0",
     "pydub>=0.25",
+    # pydub imports the stdlib `audioop` module, which was removed in Python 3.13 (PEP 594).
+    # audioop-lts is the maintained backport that restores it; only needed on 3.13+.
+    "audioop-lts; python_version >= '3.13'",
 ]
 
 # NVIDIA GPU (CUDA 12) runtime libraries — cuBLAS + cuDNN 9, which ctranslate2 loads for GPU
