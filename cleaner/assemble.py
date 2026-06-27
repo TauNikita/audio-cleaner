@@ -18,9 +18,31 @@ from .util import Progress, fmt_ts
 _GAP_PAUSE_MS = 200
 
 # Whisper's word-end timestamp marks where a word's energy mostly ends, clipping the natural release.
-# At a sentence's true end we fade out over a longer window than the click-killing crossfade so the
-# voice tapers naturally into the pause instead of stopping abruptly.
-_END_FADE_MS = 150
+# Rather than fade the end (which sounds like the volume dying down), we extend past word-end until
+# the audio actually goes quiet and cut there, so the sentence ends in real silence with no fade.
+# "Quiet" means this many dB below the sentence's own speech level, sustained for a short span.
+_SILENCE_BELOW_DB = 25.0
+_SILENCE_SUSTAIN_MS = 40
+_SILENCE_STEP_MS = 10
+
+
+def _quiet_cut_ms(audio, start_ms: int, limit_ms: int, floor_dbfs: float) -> int:
+    """First point at/after start_ms where the audio stays below floor_dbfs for _SILENCE_SUSTAIN_MS.
+
+    Returns limit_ms if it never settles (e.g. the sentence runs straight into the next with no
+    pause), so the caller's cap and next-sentence guard still bound the cut.
+    """
+    quiet = 0
+    pos = start_ms
+    while pos < limit_ms:
+        if audio[pos:pos + _SILENCE_STEP_MS].dBFS <= floor_dbfs:
+            quiet += _SILENCE_STEP_MS
+            if quiet >= _SILENCE_SUSTAIN_MS:
+                return min(limit_ms, pos + _SILENCE_STEP_MS)
+        else:
+            quiet = 0
+        pos += _SILENCE_STEP_MS
+    return limit_ms
 
 
 def _split_runs(words: list[Word], w_start: int, w_end: int,
@@ -68,8 +90,8 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
 
     Each span is cut from its temporally-contiguous runs (see _split_runs), excising internal gaps
     longer than max_internal_gap_ms so dead air and dropped retakes don't end up in the output. The
-    lead edge gets pad_ms; the sentence's true end gets the larger tail_pad_ms plus a longer fade so
-    the natural decay isn't clipped.
+    lead edge gets pad_ms; the sentence's true end is extended (up to tail_pad_ms) to the natural
+    quiet point so the decay isn't clipped and isn't faded — it just ends in silence.
     """
     AudioSegment = _load_pydub()
     max_gap_s = max_internal_gap_ms / 1000.0
@@ -90,8 +112,8 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
                          if i + 1 < len(kept) else total_ms)
 
         # Build the span from its contiguous runs, dropping large internal gaps. The lead edge gets
-        # pad_ms; the sentence's true end gets the larger tail_pad_ms and a longer fade so the natural
-        # decay tapers instead of stopping abruptly. Internal splice edges get only the anti-click
+        # pad_ms; the sentence's true end is extended to the natural quiet point (capped by tail_pad_ms
+        # and the next sentence) so it ends in silence with no fade. All edges get only the anti-click
         # crossfade.
         runs = _split_runs(words, d.word_start, d.word_end, max_gap_s)
         clip = AudioSegment.empty()
@@ -100,18 +122,17 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
             run_end_ms = int(round(run_end * 1000))
             start = int(round(run_start * 1000)) - (pad_ms if r == 0 else 0)
             if is_last:
-                end = min(run_end_ms + tail_pad_ms, max(run_end_ms, next_start_ms))
+                limit = min(run_end_ms + tail_pad_ms, max(run_end_ms, next_start_ms))
+                ref = audio[max(0, run_end_ms - 400):run_end_ms].dBFS
+                floor = -50.0 if ref == float("-inf") else ref - _SILENCE_BELOW_DB
+                end = _quiet_cut_ms(audio, run_end_ms, limit, floor)
             else:
                 end = run_end_ms
             sub = audio[max(0, start):min(total_ms, end)]
 
-            half = len(sub) // 2
-            fade_in = min(crossfade_ms, half)
-            fade_out = min(_END_FADE_MS if is_last else crossfade_ms, half)
-            if fade_in > 0:
-                sub = sub.fade_in(fade_in)
-            if fade_out > 0:
-                sub = sub.fade_out(fade_out)
+            fade = min(crossfade_ms, len(sub) // 2)
+            if fade > 0:
+                sub = sub.fade_in(fade).fade_out(fade)
 
             if r > 0 and _GAP_PAUSE_MS > 0:
                 gap_pause = AudioSegment.silent(duration=_GAP_PAUSE_MS, frame_rate=frame_rate)

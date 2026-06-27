@@ -44,9 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("assembly (ms)")
     g.add_argument("--pad", type=int, default=60, help="padding added to each cut edge (default: 60)")
-    g.add_argument("--tail-pad", type=int, default=180,
-                   help="extra padding kept at a sentence's end so the natural decay isn't clipped "
-                        "(default: 180)")
+    g.add_argument("--tail-pad", type=int, default=600,
+                   help="max audio kept past a sentence's last word while extending to the natural "
+                        "quiet point, so the decay ends in silence not a clip (default: 600)")
     g.add_argument("--sentence-pause", type=int, default=350,
                    help="silence between sentences (default: 350)")
     g.add_argument("--paragraph-pause", type=int, default=900,
