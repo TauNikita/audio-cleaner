@@ -34,11 +34,28 @@ sudo apt install ffmpeg
 brew install ffmpeg
 ```
 
+```powershell
+# Windows (PowerShell) — pick one
+winget install Gyan.FFmpeg
+# or:  choco install ffmpeg
+# or:  scoop install ffmpeg
+```
+
+After installing on Windows, open a **new** terminal so `ffmpeg` is on `PATH` (check with
+`ffmpeg -version`).
+
 ### 2. Install uv
 
 ```bash
+# Linux / macOS
 curl -LsSf https://astral.sh/uv/install.sh | sh
 # then restart the shell, or:  export PATH="$HOME/.local/bin:$PATH"
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# or:  winget install astral-sh.uv
 ```
 
 ### 3. Get the code and create the environment
@@ -71,8 +88,11 @@ uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" -o 
 The transcript is cached next to the media (`*.words.json`), so re-running the dry-run while you
 tune `--threshold` is instant. Use `--refresh` to force re-transcription.
 
-> Prefer plain pip? `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then run
-> with `.venv/bin/python clean.py ...`. The uv path above is recommended.
+The same `uv run clean.py ...` commands work on Windows (PowerShell); paths may use `\` or `/`.
+
+> Prefer plain pip? Linux/macOS: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
+> run with `.venv/bin/python clean.py ...`. Windows: `py -m venv .venv; .venv\Scripts\pip install -r
+> requirements.txt`, run with `.venv\Scripts\python clean.py ...`. The uv path above is recommended.
 
 ## GPU acceleration (NVIDIA, incl. RTX 50-series / RTX 5070)
 
@@ -105,6 +125,29 @@ uv run clean.py "data/audio/Main.mp3" "data/script/Annexation of Crimea.txt" --d
 `--device auto` (the default) will pick the GPU on its own once the libraries above are in place. If
 you hit a `cudnn`/`cublas` "library not found" error, the `LD_LIBRARY_PATH` export in step 3 is
 almost always the fix. For lower VRAM use try `--compute-type int8_float16`.
+
+### Setup (Windows)
+
+The pip `gpu` extra is Linux-oriented, so on Windows supply the CUDA libraries another way. NVIDIA
+driver R570+ must be installed first (verify with `nvidia-smi`).
+
+```powershell
+# 1. Install the base project:
+uv sync
+
+# 2. Provide the cuBLAS + cuDNN 9 DLLs (pick one):
+#    a) Easiest: download Purfview's prebuilt NVIDIA libraries for Windows
+#       (https://github.com/Purfview/whisper-standalone-win, "CUDA libs"),
+#       unzip, and put the DLLs on PATH or in the repo folder next to clean.py.
+#    b) Or install the CUDA Toolkit 12.8+ and cuDNN 9, then add their bin\ dirs to PATH.
+
+# 3. Run on the GPU (float16 is selected automatically on cuda):
+uv run clean.py "data\audio\Main.mp3" "data\script\Annexation of Crimea.txt" --device cuda
+```
+
+`ctranslate2` loads the DLLs from `PATH` on Windows (there is no `LD_LIBRARY_PATH`). If you get a
+`cublas`/`cudnn` "not found" error, the DLLs aren't on `PATH` — recheck step 2. For lower VRAM use
+`--compute-type int8_float16`.
 
 ## Options
 
