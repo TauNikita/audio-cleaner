@@ -54,6 +54,11 @@ def _best_window_at(words: list[Word], start: int, target: str,
 # spoken take, many consecutive starts qualify; a real retake is separated by a flubbed/again gap.
 _CLUSTER_GAP = 3
 
+# After a sentence first starts matching, how many consecutive non-matching word positions to allow
+# before concluding we've scanned past where it was spoken. Generous enough to bridge a flubbed take
+# between retakes, small enough to never jump minutes ahead to a recurring phrase.
+_SCAN_STOP_GAP = 120
+
 
 def _pick_last_take(cands: list[tuple[int, int, float]]) -> tuple[int, int, float]:
     """From qualifying (start, end, score) windows, pick the best window of the latest take.
@@ -89,12 +94,24 @@ def align_sentence(words: list[Word], pointer: int, sentence: Sentence,
 
     scan_end = n if horizon is None else min(n, pointer + horizon)
 
+    # Scan forward for qualifying windows. Once the sentence starts matching, keep going only while
+    # matches keep appearing nearby; a long run with no match means we've moved past the spot where
+    # this sentence was spoken, so stop. This keeps "latest take" meaning the last *retake* (local)
+    # instead of letting a recurring phrase match minutes later and jump the pointer across the file.
     high: list[tuple[int, int, float]] = []
     low: list[tuple[int, int, float]] = []
+    found = False
+    miss_run = 0
     for start in range(pointer, scan_end):
         score, end = _best_window_at(words, start, target, lengths, n, low_cutoff)
         if score <= 0.0:
+            if found:
+                miss_run += 1
+                if miss_run > _SCAN_STOP_GAP:
+                    break
             continue
+        found = True
+        miss_run = 0
         (high if score >= threshold else low).append((start, end, score))
 
     if high:
