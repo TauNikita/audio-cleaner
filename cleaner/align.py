@@ -12,7 +12,7 @@ jump to the later occurrence, because the clauses after it would then have no ro
 """
 
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .text import Sentence
 from .transcribe import Word
@@ -32,6 +32,8 @@ class Decision:
     end: float | None         # seconds
     word_start: int | None    # index into the word list (inclusive)
     word_end: int | None      # index into the word list (exclusive)
+    excise: list = field(default_factory=list)  # (start, end) seconds dropped inside the span
+    notes: list = field(default_factory=list)   # what hidden.refine() changed, for the report
 
 
 # Scores at or above threshold + GOOD_MARGIN are treated as equally good, so the later take wins;

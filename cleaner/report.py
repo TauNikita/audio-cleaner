@@ -38,6 +38,12 @@ def print_report(decisions: list[Decision], threshold: float, model: str) -> dic
     total = len(decisions)
     matched = counts[MATCH] + counts[LOW]
     print("-" * len(header))
+    refined = [d for d in decisions if d.notes]
+    if refined:
+        print(f"Refined {len(refined)} spans (hidden retakes / clipped starts):")
+        for d in refined:
+            print(f"  #{d.sentence.index:<3} {'; '.join(d.notes)}")
+        print("-" * len(header))
     print(f"Summary: {matched}/{total} matched "
           f"({counts[MATCH]} solid, {counts[LOW]} low-confidence '?'), "
           f"{counts[MISSING]} MISSING '!!'.")

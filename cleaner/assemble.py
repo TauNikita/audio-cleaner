@@ -79,9 +79,32 @@ def _load_pydub():
     return AudioSegment
 
 
+def _clip_runs(runs: list[tuple[float, float]], start: float, end: float,
+               excise: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Trim runs to [start, end] and cut the excised intervals out of them (see hidden.refine)."""
+    out: list[tuple[float, float]] = []
+    for r, (a, b) in enumerate(runs):
+        # The first run begins where refine() says the take begins: later than the first word's
+        # timestamp after a restart, earlier than it when that timestamp landed late.
+        pieces = [(start if r == 0 else max(a, start), min(b, end))]
+        for x, y in excise:
+            nxt = []
+            for pa, pb in pieces:
+                if y <= pa or x >= pb:
+                    nxt.append((pa, pb))
+                else:
+                    if x > pa:
+                        nxt.append((pa, x))
+                    if y < pb:
+                        nxt.append((y, pb))
+            pieces = nxt
+        out += [(pa, pb) for pa, pb in pieces if pb - pa > 0.05]
+    return out
+
+
 def assemble(media: str, decisions: list[Decision], words: list[Word], output: str,
              pad_ms: int, tail_pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
-             crossfade_ms: int, max_internal_gap_ms: int) -> None:
+             crossfade_ms: int, max_internal_gap_ms: int, energy=None) -> None:
     """Render the kept spans to `output`. Format is inferred from the extension.
 
     Spans are cut from the original recording, not the bandwidth-limited 16kHz mono WAV used for
@@ -115,7 +138,8 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
         # pad_ms; the sentence's true end is extended to the natural quiet point (capped by tail_pad_ms
         # and the next sentence) so it ends in silence with no fade. All edges get only the anti-click
         # crossfade.
-        runs = _split_runs(words, d.word_start, d.word_end, max_gap_s)
+        runs = _clip_runs(_split_runs(words, d.word_start, d.word_end, max_gap_s),
+                          d.start, d.end, d.excise)
         clip = AudioSegment.empty()
         for r, (run_start, run_end) in enumerate(runs):
             is_last = r == len(runs) - 1
@@ -123,6 +147,9 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
             start = int(round(run_start * 1000)) - (pad_ms if r == 0 else 0)
             if is_last:
                 limit = min(run_end_ms + tail_pad_ms, max(run_end_ms, next_start_ms))
+                if energy is not None:  # and never into the next take's first syllable
+                    onset_ms = int(energy.next_onset_after(run_end + 0.05, tail_pad_ms / 1000.0) * 1000) - 40
+                    limit = max(run_end_ms, min(limit, onset_ms))
                 ref = audio[max(0, run_end_ms - 400):run_end_ms].dBFS
                 floor = -50.0 if ref == float("-inf") else ref - _SILENCE_BELOW_DB
                 end = _quiet_cut_ms(audio, run_end_ms, limit, floor)

@@ -22,6 +22,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="output audio file; format inferred from extension (default: clean.wav)")
     p.add_argument("--dry-run", action="store_true",
                    help="align and print the report only; write no audio")
+    p.add_argument("--no-refine", action="store_true",
+                   help="skip the hidden-retake pass (re-listening inside each chosen span for a "
+                        "restart or stutter whisper's transcript hid)")
 
     g = p.add_argument_group("transcription")
     g.add_argument("--model", default="small.en", help="faster-whisper model (default: small.en)")
@@ -95,13 +98,15 @@ def main(argv: list[str] | None = None) -> int:
     # Whisper, even on a full render.
     need_transcribe = args.refresh or tr.load_cache(
         cache_path, args.media, args.model, args.language) is None
-    need_wav = need_transcribe
+    refine_on = not args.no_refine
+    # The refine pass listens to the audio again, so it needs the 16kHz WAV too.
+    need_wav = need_transcribe or refine_on
 
     wav_path = None
     is_temp_wav = False
     try:
         # Resolve device/compute only when a transcribe is actually on the table.
-        if need_transcribe:
+        if need_transcribe or refine_on:
             args.device, args.compute_type = tr.resolve_device(args.device, args.compute_type)
             print(f"Device: {args.device} / {args.compute_type}")
 
@@ -121,6 +126,13 @@ def main(argv: list[str] | None = None) -> int:
 
         decisions = align(words, sentences, threshold=args.threshold,
                           max_extra=args.max_extra, horizon=args.horizon)
+
+        energy = prober = None
+        if refine_on:
+            from .hidden import Energy, Prober, refine
+            energy = Energy(wav_path)
+            prober = Prober(tr._load_model(args.model, args.device, args.compute_type), args.language)
+            refine(decisions, words, energy, prober, max_gap_s=args.max_internal_gap / 1000.0)
         counts = print_report(decisions, threshold=args.threshold, model=args.model)
 
         if args.dry_run:
@@ -131,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
                  tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
                  paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
-                 max_internal_gap_ms=args.max_internal_gap)
+                 max_internal_gap_ms=args.max_internal_gap, energy=energy)
         return 0
 
     except (DependencyError, ImportError) as exc:
