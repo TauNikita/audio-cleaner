@@ -5,7 +5,8 @@ Turn a messy voiceover recording into a clean read that follows a written script
 You record narration with pauses, false starts, and retakes. This tool transcribes the recording
 with word-level timestamps, aligns each script sentence to the **last good take** of that sentence
 in the audio, and stitches the chosen pieces together with natural pauses between sentences and
-paragraphs.
+paragraphs. `--clauses` aligns at commas, semicolons, colons and dashes instead, which picks up a
+retake from the last comma but adds cuts that can clip word endings.
 
 Crucially, it lets you **review every pick before any audio is rendered** (`--dry-run`).
 
@@ -16,10 +17,20 @@ recording (audio/video) ──ffmpeg──► 16kHz mono WAV
                                           │
                                   faster-whisper (word timestamps)
                                           │
-script.txt ──► sentences ──► align each sentence to its last retake
+script.txt ──► sentences ──► place every sentence, in order, on its last good take
+                                          │
+                   listen again inside each pick for retakes whisper hid
                                           │
                           cut + concat with pauses ──► clean.wav
+                                          │
+                     --verify: re-transcribe the output, sentence by sentence
 ```
+
+Whisper suppresses text it has just produced, so a sentence restarted mid-flow often transcribes as
+one long word or as nothing at all — and the aligner would keep the whole stretch, so the output
+repeats. The refine pass re-transcribes short pieces of audio in isolation, starting *inside* those
+spots, and keeps only the last attempt. `--verify` then checks every sentence of the rendered file
+against the script and prints the ones worth a listen, with output timestamps.
 
 ## From scratch on a new machine
 
@@ -167,6 +178,9 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 | --- | --- | --- |
 | `-o, --output` | `clean.wav` | Output file (format inferred from extension) |
 | `--dry-run` | off | Align and print the report, write no audio |
+| `--clauses` | off | Align clauses instead of whole sentences (more cuts; may clip word endings) |
+| `--no-refine` | off | Skip the hidden-retake pass (re-listening inside each pick) |
+| `--verify` | off | After rendering, re-transcribe each sentence from the output and flag mismatches |
 | `--model` | `small.en` | faster-whisper model |
 | `--language` | `en` | Spoken language |
 | `--device` | `auto` | `auto` (GPU if available, else CPU), `cpu`, or `cuda` |
@@ -175,6 +189,7 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 | `--max-extra` | `3` | Extra words to try beyond sentence length when matching |
 | `--horizon` | unlimited | Max words to scan ahead per sentence |
 | `--pad` | `60` | Padding (ms) added to each cut edge |
+| `--clause-pause` | `120` | Silence (ms) between clauses of one sentence (`--clauses` only) |
 | `--sentence-pause` | `350` | Silence (ms) between sentences |
 | `--paragraph-pause` | `900` | Silence (ms) between paragraphs |
 | `--crossfade` | `15` | Crossfade (ms) at each join |
@@ -186,4 +201,6 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 - Works best on a script of full sentences. Bullet points / shorthand match poorly (you'll get a
   warning).
 - The score column in the dry-run makes a bad pick easy to spot — retakes are not assumed to be in
-  order.
+  order. In the `P` column, `,` marks a clause that continues its sentence, `¶` a paragraph end.
+- `AUDIO_CLEANER_EXPLAIN=12,40 uv run clean.py ... --dry-run` prints, for units 12 and 40, every
+  probe the hidden-retake pass heard and the restart evidence it drew from them.
