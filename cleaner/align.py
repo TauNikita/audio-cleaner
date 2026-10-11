@@ -47,18 +47,16 @@ SKIP_COST = 60.0
 MAX_SKIP = 8
 # Qualifying starts this close together belong to one take of the unit.
 TAKE_GAP = 3
-# Within a take, prefer the shortest window scoring within this many points of the best one, so a
-# window does not swallow the next unit's first words for a point of fuzzy score.
-TIGHT_MARGIN = 3.0
-# Consecutive units may overlap by this many transcript words; the later unit keeps them.
-OVERLAP_WORDS = 1
+# Consecutive units may overlap by this many transcript words; the later unit keeps them. This is
+# how a window that ran a little past its unit's last word (fuzzy score tolerates a few extra
+# words) gives those words back to the unit they belong to.
+OVERLAP_WORDS = 3
 
 
 def _best_window_at(words: list[Word], start: int, target: str,
                     lengths: range, n: int, cutoff: float) -> tuple[float, int]:
-    """Best (score, end_index) over the candidate window lengths at a given start.
-
-    Returns (0.0, start) when nothing reaches the cutoff.
+    """Best (score, end_index) over the candidate window lengths at a given start; on a tie the
+    shorter window. Returns (0.0, start) when nothing reaches the cutoff.
     """
     from rapidfuzz import fuzz
 
@@ -91,20 +89,21 @@ def _candidates(words: list[Word], unit: Sentence, max_extra: int,
         if score > 0.0:
             windows.append((start, end, score))
     # Neighbouring starts are the same take seen through slightly different windows; keep only the
-    # best-fitting window of each take, so the placement below chooses between takes, not between
-    # a tight window and one that swallows the next unit's first words.
+    # best-fitting window of each take (earliest start on a tie, so a leading word is never shaved
+    # off), so the placement below chooses between takes. A start that lies at or past the end of
+    # the take's best window is a new take even when it follows directly: the unit said again
+    # back to back, with nothing between the two readings.
     takes: list[list[tuple[int, int, float]]] = []
+    best_end = -1
     for w in windows:
-        if takes and w[0] - takes[-1][-1][0] <= TAKE_GAP:
+        if takes and w[0] - takes[-1][-1][0] <= TAKE_GAP and w[0] < best_end - OVERLAP_WORDS:
             takes[-1].append(w)
+            if w[2] > max(x[2] for x in takes[-1][:-1]):
+                best_end = w[1]
         else:
             takes.append([w])
-    picked = []
-    for t in takes:
-        best = max(w[2] for w in t)
-        close = [w for w in t if w[2] >= best - TIGHT_MARGIN]
-        picked.append(min(close, key=lambda w: (w[1] - w[0], -w[2], -w[0])))
-    return picked
+            best_end = w[1]
+    return [max(t, key=lambda w: (w[2], -w[0])) for t in takes]
 
 
 def align(words: list[Word], sentences: list[Sentence], threshold: float,

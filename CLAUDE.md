@@ -45,15 +45,17 @@ script.txt ──► sentences ──► align each sentence to its last retake
 ## The alignment core (`align.py`)
 
 - For each unit, score word windows (lengths `len-2 .. len+max_extra`) at every transcript position
-  with `rapidfuzz.fuzz.ratio`; qualifying starts within `TAKE_GAP` of each other are one **take**,
-  and the take keeps its shortest window within `TIGHT_MARGIN` points of its best (so a window never
-  swallows the next unit's first words for a point of score).
-- Place all units by dynamic programming in script order: windows may overlap by at most
-  `OVERLAP_WORDS` (the later unit keeps the word), skipping a unit costs `SKIP_COST`, and the value
-  of a take is `min(score, threshold + GOOD_MARGIN)` plus a tiny later-is-better bonus. So among
-  takes that all read well the **latest** wins (the final retake), while a clearly worse take loses. The end-sorted lookup tables
-  record, per position, the candidate that holds the running best, so trace-back returns the
-  candidate whose value was used.
+  with `rapidfuzz.fuzz.ratio`; at one start the best-scoring length wins (shorter on a tie).
+  Qualifying starts within `TAKE_GAP` of each other are one **take** unless a start lies at or past
+  the end of the take's best window (the unit said again back to back); a take keeps its
+  best-scoring window, earliest start on a tie, so a leading word is never shaved off.
+- Place all units by dynamic programming in script order: windows may overlap by up to
+  `OVERLAP_WORDS` (the later unit keeps the words, which is how a window that ran a few words past
+  its unit gives them back), skipping a unit costs `SKIP_COST`, and the value of a take is
+  `min(score, threshold + GOOD_MARGIN)` plus a tiny later-is-better bonus. So among takes that all
+  read well the **latest** wins (the final retake), while a clearly worse take loses. The end-sorted
+  lookup tables record, per position, the candidate that holds the running best, so trace-back
+  returns the candidate whose value was used.
 - The order constraint is what makes short units safe: a clause that recurs later in its sentence
   cannot jump there, because the clauses after it would have no room.
 - Scores below `--threshold` but above the relaxed cutoff → `LOW`; a unit that fits nowhere → `MISSING`
