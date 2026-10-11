@@ -22,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="output audio file; format inferred from extension (default: clean.wav)")
     p.add_argument("--dry-run", action="store_true",
                    help="align and print the report only; write no audio")
+    p.add_argument("--clauses", action="store_true",
+                   help="align clauses (split at commas, semicolons, colons and dashes) instead of "
+                        "whole sentences; picks up retakes from the last comma but the extra cuts "
+                        "can clip word endings")
     p.add_argument("--no-refine", action="store_true",
                    help="skip the hidden-retake pass (re-listening inside each chosen span for a "
                         "restart or stutter whisper's transcript hid)")
@@ -53,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--tail-pad", type=int, default=600,
                    help="max audio kept past a sentence's last word while extending to the natural "
                         "quiet point, so the decay ends in silence not a clip (default: 600)")
+    g.add_argument("--clause-pause", type=int, default=120,
+                   help="silence between clauses of one sentence (default: 120)")
     g.add_argument("--sentence-pause", type=int, default=350,
                    help="silence between sentences (default: 350)")
     g.add_argument("--paragraph-pause", type=int, default=900,
@@ -79,15 +85,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     with open(args.script, "r", encoding="utf-8") as fh:
-        sentences = split_script(fh.read())
+        sentences = split_script(fh.read(), clauses=args.clauses)
     if not sentences:
         print("error: the script has no sentences", file=sys.stderr)
         return 2
     if not looks_like_prose(sentences):
         print("warning: the script looks like bullet points or shorthand rather than full "
               "sentences; matching will be poor. Full sentences work best.", file=sys.stderr)
-    print(f"Script: {len(sentences)} sentences, "
-          f"{sum(1 for s in sentences if s.paragraph_end)} paragraphs.")
+    print(f"Script: {len(sentences)} units ({sum(1 for s in sentences if s.sentence_end)} sentences, "
+          f"{sum(1 for s in sentences if s.paragraph_end)} paragraphs).")
 
     from . import transcribe as tr
     from .align import align
@@ -147,7 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         positions = assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
                              tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
                              paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
-                             max_internal_gap_ms=args.max_internal_gap, energy=energy)
+                             max_internal_gap_ms=args.max_internal_gap, energy=energy,
+                             clause_pause_ms=args.clause_pause)
         if args.verify:
             from .audio import extract_wav
             from .verify import verify

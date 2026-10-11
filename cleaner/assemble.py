@@ -105,7 +105,7 @@ def _clip_runs(runs: list[tuple[float, float]], start: float, end: float,
 def assemble(media: str, decisions: list[Decision], words: list[Word], output: str,
              pad_ms: int, tail_pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
              crossfade_ms: int, max_internal_gap_ms: int,
-             energy=None) -> list[tuple[Decision, float, float]]:
+             energy=None, clause_pause_ms: int = 120) -> list[tuple[Decision, float, float]]:
     """Render the kept spans to `output`. Format is inferred from the extension. Returns where
     each kept sentence landed in the output as (decision, start_s, end_s), for verify().
 
@@ -171,7 +171,12 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
 
         if i > 0:
             prev = kept[i - 1]
-            pause = paragraph_pause_ms if prev.sentence.paragraph_end else sentence_pause_ms
+            if prev.sentence.paragraph_end:
+                pause = paragraph_pause_ms
+            elif prev.sentence.sentence_end:
+                pause = sentence_pause_ms
+            else:
+                pause = clause_pause_ms
             if pause > 0:
                 silence = AudioSegment.silent(duration=pause, frame_rate=frame_rate)
                 result += silence.set_channels(audio.channels)

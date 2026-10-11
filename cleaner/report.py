@@ -26,7 +26,7 @@ def print_report(decisions: list[Decision], threshold: float, model: str) -> dic
     for d in decisions:
         counts[d.status] += 1
         idx = d.sentence.index
-        para = "¶" if d.sentence.paragraph_end else " "
+        para = "¶" if d.sentence.paragraph_end else (" " if d.sentence.sentence_end else ",")
         if d.status == MISSING:
             print(f"{idx:>4}  {'--':>5}  {'MISSING':>11}  {'':>11}  {para}  "
                   f"!! {_snippet(d.sentence.raw)}")
