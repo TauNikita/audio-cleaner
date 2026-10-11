@@ -180,6 +180,20 @@ def align(words: list[Word], sentences: list[Sentence], threshold: float,
         if e0 > s1 > s0:
             cands[a][chosen[a]] = (s0, s1, sc0)
 
+    # A window may begin one word late when whisper rendered the words after the unit's first
+    # word as copies of it ("another another another was" for "Another, Igor Melyantsev, was"):
+    # the window skipping the real first word scores higher for carrying less garble. Reclaim a
+    # first word that sits glued to the window's start and is not the previous unit's.
+    from rapidfuzz import fuzz
+    for i, k in enumerate(placed):
+        s, e, sc = cands[k][chosen[k]]
+        bound = cands[placed[i - 1]][chosen[placed[i - 1]]][1] if i else 0
+        first = sentences[k].tokens[0]
+        while s > bound and fuzz.ratio(words[s - 1].norm, first) >= 80 \
+                and words[s].start - words[s - 1].end < 0.35:
+            s -= 1
+        cands[k][chosen[k]] = (s, e, sc)
+
     decisions: list[Decision] = []
     for k, unit in enumerate(sentences):
         if k in chosen:
