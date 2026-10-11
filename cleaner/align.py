@@ -1,11 +1,17 @@
-"""Align each script sentence to the spoken words, preferring the last retake.
+"""Align every script unit (clause or sentence) to the spoken words, preferring the last retake.
 
-For every sentence we scan the transcript forward from a moving pointer, score candidate word
-windows against the sentence with a fuzzy ratio, and keep the qualifying window with the *latest*
-start. Latest-start is what picks the final retake over earlier flubbed attempts. The pointer only
-advances past a matched span, so each sentence is searched only in audio after the previous match.
+Every unit is scored against candidate word windows across the whole transcript with a fuzzy
+ratio. The units are then placed in script order by dynamic programming: each unit takes one
+window, windows cannot overlap, later units come after earlier ones, and a unit that fits nowhere
+is skipped (MISSING) at a fixed cost. Among takes that all read well (scores within a few points of
+each other) the latest start wins, because the last attempt is the one the speaker meant to keep.
+
+The order constraint is what makes short units safe: a clause that also occurs later in the same
+sentence ("the Special Operations Forces" ... "their own Special Operations Forces Command") cannot
+jump to the later occurrence, because the clauses after it would then have no room.
 """
 
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from .text import Sentence
@@ -26,6 +32,24 @@ class Decision:
     end: float | None         # seconds
     word_start: int | None    # index into the word list (inclusive)
     word_end: int | None      # index into the word list (exclusive)
+
+
+# Scores at or above threshold + GOOD_MARGIN are treated as equally good, so the later take wins;
+# a take has to read clearly better than a later one to be preferred over it.
+GOOD_MARGIN = 10.0
+# Tie-break weight per word of transcript position (keeps "later wins" below any real score gap).
+LATER_BONUS = 1e-4
+# Cost of leaving a unit out. Larger than any score gain re-placing neighbours could buy.
+SKIP_COST = 60.0
+# How many consecutive units may be skipped in a row.
+MAX_SKIP = 8
+# Qualifying starts this close together belong to one take of the unit.
+TAKE_GAP = 3
+# Within a take, prefer the shortest window scoring within this many points of the best one, so a
+# window does not swallow the next unit's first words for a point of fuzzy score.
+TIGHT_MARGIN = 3.0
+# Consecutive units may overlap by this many transcript words; the later unit keeps them.
+OVERLAP_WORDS = 1
 
 
 def _best_window_at(words: list[Word], start: int, target: str,
@@ -50,105 +74,128 @@ def _best_window_at(words: list[Word], start: int, target: str,
     return best_score, best_end
 
 
-# How far apart two qualifying start positions can be and still count as the same take. Within one
-# spoken take, many consecutive starts qualify; a real retake is separated by a flubbed/again gap.
-_CLUSTER_GAP = 3
-
-# After a sentence first starts matching, how many consecutive non-matching word positions to allow
-# before concluding we've scanned past where it was spoken. Generous enough to bridge a flubbed take
-# between retakes, small enough to never jump minutes ahead to a recurring phrase.
-_SCAN_STOP_GAP = 120
-
-
-def _pick_last_take(cands: list[tuple[int, int, float]]) -> tuple[int, int, float]:
-    """From qualifying (start, end, score) windows, pick the best window of the latest take.
-
-    Grouping consecutive starts into takes, then choosing the highest score within the latest take,
-    gives us the final retake without the latest-start rule shaving the first word off a sentence.
-    """
-    last_take = [cands[0]]
-    for cand in cands[1:]:
-        if cand[0] - last_take[-1][0] <= _CLUSTER_GAP:
-            last_take.append(cand)
-        else:
-            last_take = [cand]  # a gap means a new take started; keep only the newest
-    # Best score in the latest take; tie-break on the later start (shorter, tighter window).
-    return max(last_take, key=lambda c: (c[2], c[0]))
-
-
-def align_sentence(words: list[Word], pointer: int, sentence: Sentence,
-                   threshold: float, max_extra: int, horizon: int | None,
-                   low_delta: float) -> tuple[float, int, int, str]:
-    """Find the best span for one sentence.
-
-    Returns (score, word_start, word_end, status). word_start is -1 when MISSING.
-    """
-    target = sentence.norm
+def _candidates(words: list[Word], unit: Sentence, max_extra: int,
+                cutoff: float) -> list[tuple[int, int, float]]:
+    """All (start, end, score) windows for one unit that clear the cutoff, in start order."""
+    target = unit.norm
     if not target:
-        return 0.0, -1, -1, MISSING
-
+        return []
     n = len(words)
-    length = len(sentence.tokens)
+    length = len(unit.tokens)
     lengths = range(max(1, length - 2), length + max_extra + 1)
-    low_cutoff = max(0.0, threshold - low_delta)
-
-    scan_end = n if horizon is None else min(n, pointer + horizon)
-
-    # Scan forward for qualifying windows. Once the sentence starts matching, keep going only while
-    # matches keep appearing nearby; a long run with no match means we've moved past the spot where
-    # this sentence was spoken, so stop. This keeps "latest take" meaning the last *retake* (local)
-    # instead of letting a recurring phrase match minutes later and jump the pointer across the file.
-    high: list[tuple[int, int, float]] = []
-    low: list[tuple[int, int, float]] = []
-    found = False
-    miss_run = 0
-    for start in range(pointer, scan_end):
-        score, end = _best_window_at(words, start, target, lengths, n, low_cutoff)
-        if score <= 0.0:
-            if found:
-                miss_run += 1
-                if miss_run > _SCAN_STOP_GAP:
-                    break
-            continue
-        found = True
-        miss_run = 0
-        (high if score >= threshold else low).append((start, end, score))
-
-    if high:
-        start, end, score = _pick_last_take(high)
-        return score, start, end, MATCH
-    if low:
-        start, end, score = _pick_last_take(low)
-        return score, start, end, LOW
-    return 0.0, -1, -1, MISSING
+    windows = []
+    for start in range(n):
+        score, end = _best_window_at(words, start, target, lengths, n, cutoff)
+        if score > 0.0:
+            windows.append((start, end, score))
+    # Neighbouring starts are the same take seen through slightly different windows; keep only the
+    # best-fitting window of each take, so the placement below chooses between takes, not between
+    # a tight window and one that swallows the next unit's first words.
+    takes: list[list[tuple[int, int, float]]] = []
+    for w in windows:
+        if takes and w[0] - takes[-1][-1][0] <= TAKE_GAP:
+            takes[-1].append(w)
+        else:
+            takes.append([w])
+    picked = []
+    for t in takes:
+        best = max(w[2] for w in t)
+        close = [w for w in t if w[2] >= best - TIGHT_MARGIN]
+        picked.append(min(close, key=lambda w: (w[1] - w[0], -w[2], -w[0])))
+    return picked
 
 
 def align(words: list[Word], sentences: list[Sentence], threshold: float,
           max_extra: int, horizon: int | None, low_delta: float = 12.0) -> list[Decision]:
-    """Align every sentence in order. Pointer advances only past matched spans."""
-    decisions: list[Decision] = []
-    pointer = 0
+    """Place every unit in order; units that fit nowhere become MISSING."""
+    low_cutoff = max(0.0, threshold - low_delta)
+    good = threshold + GOOD_MARGIN
     progress = Progress("Align")
     total = len(sentences)
 
-    for i, sentence in enumerate(sentences, 1):
-        score, w_start, w_end, status = align_sentence(
-            words, pointer, sentence, threshold, max_extra, horizon, low_delta
-        )
-        if status in (MATCH, LOW):
-            decisions.append(Decision(
-                sentence=sentence, status=status, score=score,
-                start=words[w_start].start, end=words[w_end - 1].end,
-                word_start=w_start, word_end=w_end,
-            ))
-            pointer = w_end  # only matched sentences move the pointer
-        else:
-            decisions.append(Decision(
-                sentence=sentence, status=MISSING, score=0.0,
-                start=None, end=None, word_start=None, word_end=None,
-            ))
-        progress.update(f"{i}/{total} sentences — pointer at word {pointer}")
+    cands: list[list[tuple[int, int, float]]] = []
+    for k, unit in enumerate(sentences, 1):
+        cands.append(_candidates(words, unit, max_extra, low_cutoff))
+        progress.update(f"{k}/{total} units scored")
 
+    # dp[k][c]: best total with unit k placed at its candidate c. back[k][c] = (j, c') predecessor.
+    dp: list[list[float]] = []
+    back: list[list[tuple[int, int] | None]] = []
+    ends: list[list[int]] = []          # candidate ends per unit, sorted (candidates are in start
+    prefix: list[list[float]] = []      # order; we sort by end for the lookup below)
+    order: list[list[int]] = []
+    for k, cs in enumerate(cands):
+        row, brow = [], []
+        for start, end, score in cs:
+            value = min(score, good) + LATER_BONUS * start
+            best_prev, best_from = -SKIP_COST * k, None  # everything before skipped
+            for j in range(k - 1, max(-1, k - 2 - MAX_SKIP), -1):
+                if not cands[j]:
+                    continue
+                pos = bisect_right(ends[j], start + OVERLAP_WORDS) - 1
+                if pos < 0:
+                    continue
+                v = prefix[j][pos] - SKIP_COST * (k - 1 - j)
+                if v > best_prev:
+                    best_prev, best_from = v, (j, order[j][pos])
+            row.append(value + best_prev)
+            brow.append(best_from)
+        dp.append(row)
+        back.append(brow)
+        # Lookup tables: candidates sorted by end, with the running best dp value up to each end.
+        idx = sorted(range(len(cs)), key=lambda c: cs[c][1])
+        order.append(idx)
+        ends.append([cs[c][1] for c in idx])
+        run, best = [], float("-inf")
+        for c in idx:
+            best = max(best, row[c])
+            run.append(best)
+        prefix.append(run)
+        progress.update(f"{k + 1}/{total} units placed")
+    # prefix[] holds running maxima, so recover the exact candidate behind each lookup value.
+    for j in range(len(cands)):
+        best_c, best_v = None, float("-inf")
+        fixed = []
+        for pos, c in enumerate(order[j]):
+            if dp[j][c] > best_v:
+                best_v, best_c = dp[j][c], c
+            fixed.append(best_c)
+        order[j] = fixed
+
+    # Best finish: the last placed unit, with any trailing units skipped.
+    best_total, best_at = -SKIP_COST * total, None
+    for k in range(total):
+        for c, v in enumerate(dp[k]):
+            if v - SKIP_COST * (total - 1 - k) > best_total:
+                best_total, best_at = v - SKIP_COST * (total - 1 - k), (k, c)
+
+    chosen: dict[int, int] = {}
+    cur = best_at
+    while cur is not None:
+        k, c = cur
+        chosen[k] = c
+        cur = back[k][c]
+
+    # Where two placed units overlap by a word, the later unit keeps it.
+    placed = sorted(chosen)
+    for a, b in zip(placed, placed[1:]):
+        s0, e0, sc0 = cands[a][chosen[a]]
+        s1 = cands[b][chosen[b]][0]
+        if e0 > s1 > s0:
+            cands[a][chosen[a]] = (s0, s1, sc0)
+
+    decisions: list[Decision] = []
+    for k, unit in enumerate(sentences):
+        if k in chosen:
+            start, end, score = cands[k][chosen[k]]
+            decisions.append(Decision(
+                sentence=unit, status=MATCH if score >= threshold else LOW, score=score,
+                start=words[start].start, end=words[end - 1].end,
+                word_start=start, word_end=end,
+            ))
+        else:
+            decisions.append(Decision(sentence=unit, status=MISSING, score=0.0,
+                                      start=None, end=None, word_start=None, word_end=None))
     matched = sum(1 for d in decisions if d.status in (MATCH, LOW))
     progress.done(f"done — {matched}/{total} matched")
     return decisions
