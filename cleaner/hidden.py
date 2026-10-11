@@ -55,6 +55,8 @@ OPENING_SCORE_SHORT = 72   # for the three-word check
 KNOWN_S = 0.4              # a probe word this close to a base word is the same word, not new speech
 RESTART_CLUSTER_S = 1.5    # sightings of the latest attempt spread over this much (timestamp jitter)
 RESTART_SNAP_S = 0.7       # snap the boundary to a silence this close before the estimate
+RESTART_GAP_S = 0.06       # failing that, to a mere breath this long, this close before it...
+RESTART_GAP_BACK_S = 0.45  # ...never cut inside a run of speech when its start is this near
 MIN_KEPT_FRACTION = 0.45   # never cut a span below this share of its expected spoken length
 WORDS_PER_S = 3.5          # fast speech; used only for that sanity floor
 LEAD_MAX_S = 0.8           # how far back a late first-word timestamp may be corrected
@@ -87,13 +89,14 @@ class Energy:
         i, j = self._frame(a), self._frame(b)
         return float(self.speech[i:j].mean()) if j > i else 0.0
 
-    def onset_before(self, t: float, max_back: float, floor: float) -> float:
+    def onset_before(self, t: float, max_back: float, floor: float,
+                     silence_s: float = LEAD_SILENCE_S) -> float:
         """Start of the speech run containing t, if it begins within max_back and after a real
-        silence; otherwise t. Never earlier than floor."""
+        silence (at least silence_s long); otherwise t. Never earlier than floor."""
         i = self._frame(t)
         limit = max(self._frame(floor), i - int(max_back * self.SR / self.HOP))
-        quiet = int(LEAD_SILENCE_S * self.SR / self.HOP)
-        # Walk back looking for a silence at least LEAD_SILENCE_S long; speech resumes after it.
+        quiet = max(1, int(silence_s * self.SR / self.HOP))
+        # Walk back looking for a silence at least silence_s long; speech resumes after it.
         j = i
         while j - quiet >= limit:
             if not self.speech[j - quiet:j].any():
@@ -397,11 +400,16 @@ def _pick_restart(exact: list[float], fuzzy: list[float], energy: Energy, floor:
     cluster_exact = sorted(t for t in exact if t >= t_max - RESTART_CLUSTER_S)
     cluster_fuzzy = sorted(t for t in fuzzy if t >= t_max - RESTART_CLUSTER_S)
     # Probes that start before the attempt report it early, probes that start inside it report
-    # it late; the median of the sightings sits close to the truth.
+    # it late; the median of the sightings sits close to the truth (the lower one when there is
+    # an even number: a few spare milliseconds beat a clipped first consonant).
     pool = cluster_exact or cluster_fuzzy
-    t_est = pool[len(pool) // 2]
+    t_est = pool[(len(pool) - 1) // 2]
     low = max(floor, min(cluster_exact + cluster_fuzzy) - 0.3)
     onset = energy.onset_before(t_est + 0.15, RESTART_SNAP_S, floor=low)
+    if onset >= t_est + 0.15:
+        # No real silence before the attempt: the speaker went straight into it. Settle for the
+        # breath between the two readings rather than cut inside the first word.
+        onset = energy.onset_before(t_est + 0.15, RESTART_GAP_BACK_S, floor=low, silence_s=RESTART_GAP_S)
     if onset < t_est + 0.15:
         return onset - 0.02
     return t_est - 0.08

@@ -32,6 +32,10 @@ repeats. The refine pass re-transcribes short pieces of audio in isolation, star
 spots, and keeps only the last attempt. `--verify` then checks every sentence of the rendered file
 against the script and prints the ones worth a listen, with output timestamps.
 
+GPU transcription is not bit-for-bit deterministic, so two runs can place a cut a few tens of
+milliseconds apart; the boundaries are snapped to silences (or the breath between two readings) so
+that this jitter never lands inside a word.
+
 ## From scratch on a new machine
 
 This project uses [uv](https://docs.astral.sh/uv/) to manage the Python environment.
