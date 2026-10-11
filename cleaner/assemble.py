@@ -104,8 +104,10 @@ def _clip_runs(runs: list[tuple[float, float]], start: float, end: float,
 
 def assemble(media: str, decisions: list[Decision], words: list[Word], output: str,
              pad_ms: int, tail_pad_ms: int, sentence_pause_ms: int, paragraph_pause_ms: int,
-             crossfade_ms: int, max_internal_gap_ms: int, energy=None) -> None:
-    """Render the kept spans to `output`. Format is inferred from the extension.
+             crossfade_ms: int, max_internal_gap_ms: int,
+             energy=None) -> list[tuple[Decision, float, float]]:
+    """Render the kept spans to `output`. Format is inferred from the extension. Returns where
+    each kept sentence landed in the output as (decision, start_s, end_s), for verify().
 
     Spans are cut from the original recording, not the bandwidth-limited 16kHz mono WAV used for
     transcription, so the output keeps the source sample rate and channels. Whisper's timestamps are
@@ -129,6 +131,7 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
 
     progress = Progress("Assemble")
     result = AudioSegment.empty()
+    positions: list[tuple[Decision, float, float]] = []
     for i, d in enumerate(kept):
         # Don't let a padded sentence end bleed into the next sentence's (also lead-padded) start.
         next_start_ms = (int(round(kept[i + 1].start * 1000)) - pad_ms
@@ -173,6 +176,7 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
                 silence = AudioSegment.silent(duration=pause, frame_rate=frame_rate)
                 result += silence.set_channels(audio.channels)
 
+        positions.append((d, len(result) / 1000.0, (len(result) + len(clip)) / 1000.0))
         result += clip
         progress.update(f"{i + 1}/{len(kept)} spans — output {fmt_ts(len(result) / 1000)}")
 
@@ -180,3 +184,4 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
     progress.update(f"encoding {output} ({ext})", force=True)
     result.export(output, format=ext)
     progress.done(f"wrote {output} — {fmt_ts(len(result) / 1000)} from {len(kept)} spans")
+    return positions

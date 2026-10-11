@@ -25,6 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-refine", action="store_true",
                    help="skip the hidden-retake pass (re-listening inside each chosen span for a "
                         "restart or stutter whisper's transcript hid)")
+    p.add_argument("--verify", action="store_true",
+                   help="after rendering, re-transcribe each sentence from the output and flag "
+                        "any that do not match the script or run long")
 
     g = p.add_argument_group("transcription")
     g.add_argument("--model", default="small.en", help="faster-whisper model (default: small.en)")
@@ -99,14 +102,14 @@ def main(argv: list[str] | None = None) -> int:
     need_transcribe = args.refresh or tr.load_cache(
         cache_path, args.media, args.model, args.language) is None
     refine_on = not args.no_refine
-    # The refine pass listens to the audio again, so it needs the 16kHz WAV too.
-    need_wav = need_transcribe or refine_on
+    # The refine and verify passes listen to the audio again, so they need the 16kHz WAV too.
+    need_wav = need_transcribe or refine_on or args.verify
 
     wav_path = None
     is_temp_wav = False
     try:
         # Resolve device/compute only when a transcribe is actually on the table.
-        if need_transcribe or refine_on:
+        if need_transcribe or refine_on or args.verify:
             args.device, args.compute_type = tr.resolve_device(args.device, args.compute_type)
             print(f"Device: {args.device} / {args.compute_type}")
 
@@ -128,10 +131,11 @@ def main(argv: list[str] | None = None) -> int:
                           max_extra=args.max_extra, horizon=args.horizon)
 
         energy = prober = None
-        if refine_on:
+        if refine_on or args.verify:
             from .hidden import Energy, Prober, refine
             energy = Energy(wav_path)
             prober = Prober(tr._load_model(args.model, args.device, args.compute_type), args.language)
+        if refine_on:
             refine(decisions, words, energy, prober, max_gap_s=args.max_internal_gap / 1000.0)
         counts = print_report(decisions, threshold=args.threshold, model=args.model)
 
@@ -140,10 +144,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         from .assemble import assemble
-        assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
-                 tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
-                 paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
-                 max_internal_gap_ms=args.max_internal_gap, energy=energy)
+        positions = assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
+                             tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
+                             paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
+                             max_internal_gap_ms=args.max_internal_gap, energy=energy)
+        if args.verify:
+            from .audio import extract_wav
+            from .verify import verify
+            out_wav = extract_wav(args.output)
+            try:
+                verify(out_wav, positions, prober)
+            finally:
+                if os.path.exists(out_wav):
+                    os.remove(out_wav)
         return 0
 
     except (DependencyError, ImportError) as exc:
