@@ -39,7 +39,13 @@ PROBE_LEN_S = 8.0          # mid-span probes
 BASE_LEN_S = 20.0          # a run's own hearing, from its start
 PROBE_STEP_S = 0.5         # probe starts are staggered through a stretched word
 WORD_MATCH = 75            # fuzzy score for a heard word to count as a script word
-REPEAT_MIN_WORDS = 2       # a repeat must re-say at least this many consecutive script words
+REPEAT_MIN_WORDS = 2       # a repeat must re-say at least this many script words (garbles aside)
+# ...and at least one of them must be a content word: two function words around a garble are
+# not evidence ("the [validating] of" is not "the 6th of" said again).
+FUNCTION_WORDS = frozenset("""
+a an and are as at be but by did do does for from had has have he her his i if in into is it its
+of on or our so than that the their them then they this to was we were who with you
+""".split())
 REPEAT_MIN_GAP_S = 0.6     # ...and land this long after the words were first heard
 RESTART_MAX_INDEX = 2      # a repeat from this early in the sentence is a restart: drop all before it
 RESTART_MIN_WORDS = 3      # ...if the new attempt carries on for at least this many words
@@ -267,7 +273,9 @@ def _repeats(heard: list[Heard], tokens: list[str]) -> list[tuple[float, float, 
     found = []
     for j, i, length in _runs(canon, tokens):
         t = heard[j].start
-        if length >= REPEAT_MIN_WORDS and i < reached and i in first_time_at \
+        said = [tokens[i + k] for k in range(length) if canon[j + k] == tokens[i + k]]
+        solid = len(said) >= REPEAT_MIN_WORDS and any(w not in FUNCTION_WORDS for w in said)
+        if solid and i < reached and i in first_time_at \
                 and t > first_time_at[i] + REPEAT_MIN_GAP_S:
             found.append((first_time_at[i], t, i, length))
         for k in range(length):
