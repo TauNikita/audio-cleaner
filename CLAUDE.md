@@ -18,6 +18,8 @@ recording (audio/video) ──ffmpeg──► 16kHz mono WAV
                                           │
 script.txt ──► sentences ──► align each sentence to its last retake
                                           │
+                  rescue.rescue(): hear the gap around a unit the transcript could not place
+                                          │
                   hidden.refine(): listen again inside each pick, drop hidden retakes
                                           │
                           cut + concat with pauses ──► clean.wav
@@ -34,6 +36,7 @@ script.txt ──► sentences ──► align each sentence to its last retake
 | `transcribe.py` | faster-whisper word timestamps; JSON cache keyed on media+model+language; `resolve_device()` for auto/cpu/cuda + compute-type defaults. |
 | `align.py` | **Core algorithm.** Every unit is scored against windows over the whole transcript, one window per take; a DP then places all units in order (no overlaps beyond one word, a unit that fits nowhere is skipped at a fixed cost), preferring the later take among takes that read equally well. See below. `Decision.excise` / `.notes` are filled by `hidden.refine()`. |
 | `hidden.py` | **Hidden-retake pass.** Whisper suppresses repeated text, so a restart inside a pick shows up as a stretched word or a blank, not as words. `Energy` (20 ms loudness mask of the 16 kHz WAV), `Prober` (re-transcribe a slice in isolation, numpy in), `refine()`. Evidence rules: a repeat is trusted only when one probe hears the script words twice (`_repeats`), or when a probe starting where the run's own hearing went blank hears the sentence opening (`_opening_run` + `_blank`); cross-probe word comparisons are never used because whisper's timestamps drift between probes. A mid-sentence repeat needs a content word said twice (two function words around a garble are not evidence), and a fuzzy re-hearing of the opening must not be the opening shifted by a word or two (the sentence carrying on). The restart boundary snaps to a real silence, failing that to the breath between two readings, never inside the first word. Also fixes a late first-word timestamp (`onset_before`) and caps a tail at the next speech onset. `Energy.quietest` lets `assemble` cut at the dip between two glued words instead of padding into the previous one. |
+| `rescue.py` | **Second look.** A sentence re-read three or four times can survive in the transcript as one garbled copy, so the aligner finds no window (MISSING) or a poor one (LOW). The unit must lie between its placed neighbours: hear that stretch in isolation (windows of 2.5x the unit's expected length, overlapping by more than one reading), run `align._candidates` on the hearing and keep the latest good take. Sets `Decision.runs` so assemble cuts the heard span, not the transcript's words. |
 | `verify.py` | `--verify`: re-transcribe each kept sentence from the rendered output in isolation, compare with the script (fuzzy ratio, extra words, duration vs the speaker's own pace, stretched words) and print the rows worth a listen with output timestamps. |
 | `report.py` | Dry-run table + MISSING / low-confidence flags + fix hints. |
 | `assemble.py` | pydub cut/pad/pause/fade and export (format from extension). |

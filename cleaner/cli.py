@@ -27,8 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "whole sentences; picks up retakes from the last comma but the extra cuts "
                         "can clip word endings")
     p.add_argument("--no-refine", action="store_true",
-                   help="skip the hidden-retake pass (re-listening inside each chosen span for a "
-                        "restart or stutter whisper's transcript hid)")
+                   help="skip the listening passes: the rescue of units the transcript could not "
+                        "place and the hidden-retake pass inside each chosen span")
     p.add_argument("--verify", action="store_true",
                    help="after rendering, re-transcribe each sentence from the output and flag "
                         "any that do not match the script or run long")
@@ -142,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
             energy = Energy(wav_path)
             prober = Prober(tr._load_model(args.model, args.device, args.compute_type), args.language)
         if refine_on:
+            from .rescue import rescue
+            rescue(decisions, words, energy, prober, threshold=args.threshold, max_extra=args.max_extra)
             refine(decisions, words, energy, prober, max_gap_s=args.max_internal_gap / 1000.0)
         counts = print_report(decisions, threshold=args.threshold, model=args.model)
 

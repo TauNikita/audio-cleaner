@@ -29,8 +29,10 @@ script.txt ──► sentences ──► place every sentence, in order, on its 
 Whisper suppresses text it has just produced, so a sentence restarted mid-flow often transcribes as
 one long word or as nothing at all — and the aligner would keep the whole stretch, so the output
 repeats. The refine pass re-transcribes short pieces of audio in isolation, starting *inside* those
-spots, and keeps only the last attempt. `--verify` then checks every sentence of the rendered file
-against the script and prints the ones worth a listen, with output timestamps.
+spots, and keeps only the last attempt. A sentence the transcript lost altogether (re-read so often
+that whisper kept one garbled copy) is rescued by hearing the audio between its neighbours in
+isolation. `--verify` then checks every sentence of the
+rendered file against the script and prints the ones worth a listen, with output timestamps.
 
 GPU transcription is not bit-for-bit deterministic, so two runs can place a cut a few tens of
 milliseconds apart; the boundaries are snapped to silences (or the breath between two readings) so

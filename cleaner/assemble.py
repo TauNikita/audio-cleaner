@@ -17,6 +17,11 @@ from .util import Progress, fmt_ts
 # sound abruptly spliced where dead air / a flubbed retake was cut out.
 _GAP_PAUSE_MS = 120
 
+# A transcript word this long is whisper covering speech it did not write out, and a short gap
+# right after it is where the lost words were said. A long gap after it is a pause or a retake.
+STRETCHED_WORD_S = 1.0
+STRETCHED_GAP_MAX_S = 2.5
+
 # Whisper's word-end timestamp marks where a word's energy mostly ends, clipping the natural release.
 # Rather than fade the end (which sounds like the volume dying down), we extend past word-end until
 # the audio actually goes quiet and cut there, so the sentence ends in real silence with no fade.
@@ -53,18 +58,21 @@ def _split_runs(words: list[Word], w_start: int, w_end: int,
     flubbed retake, a few stray words straddle it with a large time gap. Cutting [first.start,
     last.end] as one block would re-include that retake / dead audio — the source of output repeats —
     so we break the span wherever the gap between consecutive words exceeds max_gap_s and drop the
-    gap. (A single word with a stretched timestamp spanning the gap is a residual case this doesn't
-    fully catch.)
+    gap. A gap right after a word with a stretched timestamp is not split: whisper collapsed a
+    stretch of speech into that word (a repeated phrase the script itself contains, say), and the
+    gap is where the lost words were said; the hidden-retake pass probes stretched words anyway.
     """
     runs: list[tuple[float, float]] = []
     run_start = words[w_start].start
     prev_end = words[w_start].end
+    prev_long = words[w_start].end - words[w_start].start > STRETCHED_WORD_S
     for wi in range(w_start + 1, w_end):
         w = words[wi]
-        if w.start - prev_end > max_gap_s:
+        if w.start - prev_end > max_gap_s and not (prev_long and w.start - prev_end <= STRETCHED_GAP_MAX_S):
             runs.append((run_start, prev_end))
             run_start = w.start
         prev_end = w.end
+        prev_long = w.end - w.start > STRETCHED_WORD_S
     runs.append((run_start, prev_end))
     return runs
 
@@ -141,7 +149,7 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
         # pad_ms; the sentence's true end is extended to the natural quiet point (capped by tail_pad_ms
         # and the next sentence) so it ends in silence with no fade. All edges get only the anti-click
         # crossfade.
-        runs = _clip_runs(_split_runs(words, d.word_start, d.word_end, max_gap_s),
+        runs = _clip_runs(d.runs or _split_runs(words, d.word_start, d.word_end, max_gap_s),
                           d.start, d.end, d.excise)
         clip = AudioSegment.empty()
         for r, (run_start, run_end) in enumerate(runs):

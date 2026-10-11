@@ -436,7 +436,7 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
     for k, d in enumerate(kept):
         span = words[d.word_start:d.word_end]
         tokens = d.sentence.tokens
-        runs_t = _split_runs(words, d.word_start, d.word_end, max_gap_s)
+        runs_t = d.runs or _split_runs(words, d.word_start, d.word_end, max_gap_s)
         near = [w for w in words if d.start - 3.0 <= w.start <= d.end + 3.0]
 
         notes = []
