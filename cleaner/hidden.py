@@ -240,8 +240,11 @@ def _opening_again(heard: list[Heard], tokens: list[str]) -> list[float]:
     # A longer opening is checked loosely, a three-word one strictly; either sighting counts.
     for n, cutoff in ((min(OPENING_WORDS, len(tokens)), OPENING_SCORE), (3, OPENING_SCORE_SHORT)):
         opening = " ".join(tokens[:n])
-        # The same words further into the unit (not a one-word shift of the opening itself).
+        # The same words further into the unit.
         later = [" ".join(tokens[i:i + n]) for i in range(3, len(tokens) - n + 1)]
+        # The opening shifted by a word or two: "and running an insurgency behind" resembles
+        # "raising and running an insurgency" but is the sentence carrying on, not said again.
+        shifted = [" ".join(tokens[i:i + n]) for i in range(1, min(3, len(tokens) - n + 1))]
         first = None
         for j in range(len(heard) - n + 1):
             window = " ".join(h.norm for h in heard[j:j + n])
@@ -251,10 +254,14 @@ def _opening_again(heard: list[Heard], tokens: list[str]) -> list[float]:
             # "he used his" is not a retake of "who used it" when the unit itself says it later.
             if any(fuzz.ratio(l, window) >= score for l in later):
                 continue
+            if any(fuzz.ratio(l, window) > score for l in shifted):
+                continue
             t = heard[j].start
+            # Saying the opening again takes at least as long as the opening itself.
+            gap = max(REPEAT_MIN_GAP_S, 0.2 * n)
             if first is None:
                 first = t
-            elif t > first + REPEAT_MIN_GAP_S and all(abs(t - a) > REPEAT_MIN_GAP_S for a in again):
+            elif t > first + gap and all(abs(t - a) > REPEAT_MIN_GAP_S for a in again):
                 again.append(t)
     return sorted(again)
 
