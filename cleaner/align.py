@@ -144,25 +144,20 @@ def align(words: list[Word], sentences: list[Sentence], threshold: float,
             brow.append(best_from)
         dp.append(row)
         back.append(brow)
-        # Lookup tables: candidates sorted by end, with the running best dp value up to each end.
+        # Lookup tables: candidates sorted by end, with the running best dp value up to each end
+        # and, at each position, the candidate that holds that running best (so a predecessor
+        # looked up by end is the one whose value was used, not merely one that ends there).
         idx = sorted(range(len(cs)), key=lambda c: cs[c][1])
-        order.append(idx)
         ends.append([cs[c][1] for c in idx])
-        run, best = [], float("-inf")
+        run, holder, best_c = [], [], None
         for c in idx:
-            best = max(best, row[c])
-            run.append(best)
+            if best_c is None or row[c] > row[best_c]:
+                best_c = c
+            run.append(row[best_c])
+            holder.append(best_c)
         prefix.append(run)
+        order.append(holder)
         progress.update(f"{k + 1}/{total} units placed")
-    # prefix[] holds running maxima, so recover the exact candidate behind each lookup value.
-    for j in range(len(cands)):
-        best_c, best_v = None, float("-inf")
-        fixed = []
-        for pos, c in enumerate(order[j]):
-            if dp[j][c] > best_v:
-                best_v, best_c = dp[j][c], c
-            fixed.append(best_c)
-        order[j] = fixed
 
     # Best finish: the last placed unit, with any trailing units skipped.
     best_total, best_at = -SKIP_COST * total, None

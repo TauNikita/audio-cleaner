@@ -51,7 +51,9 @@ script.txt ──► sentences ──► align each sentence to its last retake
 - Place all units by dynamic programming in script order: windows may overlap by at most
   `OVERLAP_WORDS` (the later unit keeps the word), skipping a unit costs `SKIP_COST`, and the value
   of a take is `min(score, threshold + GOOD_MARGIN)` plus a tiny later-is-better bonus. So among
-  takes that all read well the **latest** wins (the final retake), while a clearly worse take loses.
+  takes that all read well the **latest** wins (the final retake), while a clearly worse take loses. The end-sorted lookup tables
+  record, per position, the candidate that holds the running best, so trace-back returns the
+  candidate whose value was used.
 - The order constraint is what makes short units safe: a clause that recurs later in its sentence
   cannot jump there, because the clauses after it would have no room.
 - Scores below `--threshold` but above the relaxed cutoff → `LOW`; a unit that fits nowhere → `MISSING`
