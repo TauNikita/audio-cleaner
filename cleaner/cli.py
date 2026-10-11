@@ -59,10 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "quiet point, so the decay ends in silence not a clip (default: 600)")
     g.add_argument("--clause-pause", type=int, default=120,
                    help="silence between clauses of one sentence (default: 120)")
-    g.add_argument("--sentence-pause", type=int, default=350,
-                   help="silence between sentences (default: 350)")
-    g.add_argument("--paragraph-pause", type=int, default=900,
-                   help="silence between paragraphs (default: 900)")
+    g.add_argument("--sentence-pause", type=int, default=176,
+                   help="silence between sentences (default: 176)")
+    g.add_argument("--paragraph-pause", type=int, default=176,
+                   help="silence between paragraphs (default: 176)")
     g.add_argument("--crossfade", type=int, default=15,
                    help="fade at each cut edge to avoid clicks (default: 15)")
     g.add_argument("--max-internal-gap", type=int, default=1200,

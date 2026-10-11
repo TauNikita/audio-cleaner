@@ -4,7 +4,7 @@ Turn a messy voiceover recording into a clean read that follows a written script
 
 You record narration with pauses, false starts, and retakes. This tool transcribes the recording
 with word-level timestamps, aligns each script sentence to the **last good take** of that sentence
-in the audio, and stitches the chosen pieces together with natural pauses between sentences and
+in the audio, and stitches the chosen pieces together with short pauses between sentences and
 paragraphs. `--clauses` aligns at commas, semicolons, colons and dashes instead, which picks up a
 retake from the last comma but adds cuts that can clip word endings.
 
@@ -190,8 +190,8 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 | `--horizon` | unlimited | Max words to scan ahead per sentence |
 | `--pad` | `60` | Padding (ms) added to each cut edge |
 | `--clause-pause` | `120` | Silence (ms) between clauses of one sentence (`--clauses` only) |
-| `--sentence-pause` | `350` | Silence (ms) between sentences |
-| `--paragraph-pause` | `900` | Silence (ms) between paragraphs |
+| `--sentence-pause` | `176` | Silence (ms) between sentences |
+| `--paragraph-pause` | `176` | Silence (ms) between paragraphs |
 | `--crossfade` | `15` | Crossfade (ms) at each join |
 | `--cache` | auto | Transcript cache path |
 | `--refresh` | off | Ignore the cache and re-transcribe |

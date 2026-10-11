@@ -15,7 +15,7 @@ from .util import Progress, fmt_ts
 
 # A short, controlled pause that replaces each excised internal gap, so a stitched span doesn't
 # sound abruptly spliced where dead air / a flubbed retake was cut out.
-_GAP_PAUSE_MS = 200
+_GAP_PAUSE_MS = 120
 
 # Whisper's word-end timestamp marks where a word's energy mostly ends, clipping the natural release.
 # Rather than fade the end (which sounds like the volume dying down), we extend past word-end until
