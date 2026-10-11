@@ -85,6 +85,16 @@ class Energy:
     def _frame(self, t: float) -> int:
         return min(len(self.speech), max(0, int(t * self.SR / self.HOP)))
 
+    def quietest(self, a: float, b: float) -> float:
+        """Start time of the quietest frame in [a, b]."""
+        i, j = self._frame(a), max(self._frame(a) + 1, self._frame(b))
+        return (i + int(np.argmin(self.db[i:j]))) * self.HOP / self.SR
+
+    def is_speech(self, a: float, b: float) -> bool:
+        """True when every frame in [a, b] is loud: no dip to cut in."""
+        i, j = self._frame(a), max(self._frame(a) + 1, self._frame(b))
+        return bool(self.speech[i:j].all())
+
     def speech_fraction(self, a: float, b: float) -> float:
         i, j = self._frame(a), self._frame(b)
         return float(self.speech[i:j].mean()) if j > i else 0.0

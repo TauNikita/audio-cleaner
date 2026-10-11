@@ -148,6 +148,10 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
             is_last = r == len(runs) - 1
             run_end_ms = int(round(run_end * 1000))
             start = int(round(run_start * 1000)) - (pad_ms if r == 0 else 0)
+            if r == 0 and energy is not None and energy.is_speech(run_start - pad_ms / 1000.0, run_start):
+                # The previous word runs straight into this one: a lead pad would carry its last
+                # consonant along. Cut at the quietest moment around the boundary instead.
+                start = int(round(energy.quietest(run_start - pad_ms / 1000.0, run_start + 0.03) * 1000))
             if is_last:
                 limit = min(run_end_ms + tail_pad_ms, max(run_end_ms, next_start_ms))
                 if energy is not None:  # and never into the next take's first syllable
