@@ -24,7 +24,7 @@ from difflib import SequenceMatcher
 
 import numpy as np
 
-from .align import Decision, LOW, MATCH
+from .align import Decision, LOW, MATCH, _candidates
 from .assemble import _split_runs
 from .text import normalize
 from .transcribe import Word
@@ -48,6 +48,7 @@ of on or our so than that the their them then they this to was we were who with 
 """.split())
 REPEAT_MIN_GAP_S = 0.6     # ...and land this long after the words were first heard
 RESTART_MAX_INDEX = 2      # a repeat from this early in the sentence is a restart: drop all before it
+SHORT_SPAN_FACTOR = 0.6    # a span shorter than this share of its expected length has a bad end
 RESTART_MIN_WORDS = 3      # ...if the new attempt carries on for at least this many words
 OPENING_WORDS = 5          # a fuzzy re-hearing of this many opening words is also a restart
 OPENING_SCORE = 75
@@ -62,6 +63,8 @@ WORDS_PER_S = 3.5          # fast speech; used only for that sanity floor
 LEAD_MAX_S = 0.8           # how far back a late first-word timestamp may be corrected
 LEAD_SILENCE_S = 0.2       # ...but only to an onset preceded by real silence
 LEAD_UNCONFIRMED_S = 0.5   # ...and, when the first word cannot be confirmed, only this far
+CUT_CHECK_S = 2.5          # hear this much from a moved cut to confirm it opens on the first word
+CUT_RUN_BACK_S = 1.0       # a cut inside a word moves to the word's start if it is this near
 
 
 class Energy:
@@ -113,6 +116,26 @@ class Energy:
                 return min(t, j * self.HOP / self.SR)
             j -= 1
         return t
+
+    def loud_run_start(self, t: float, max_back: float, below_peak_db: float = 26.0,
+                       dip_s: float = 0.15) -> float | None:
+        """When t lies inside, or within dip_s after, a run of loud frames (within below_peak_db of
+        the loudest frame just after t: a word, where a breath or room noise is far quieter), the
+        time that run begins, if within max_back; otherwise None."""
+        i = self._frame(t)
+        seg = self.db[i:self._frame(t + 0.8)]
+        if len(seg) == 0:
+            return None
+        threshold = float(seg.max()) - below_peak_db
+        j = i
+        while j > 0 and i - j <= int(dip_s * self.SR / self.HOP) and self.db[j - 1] < threshold:
+            j -= 1  # a short dip between two words does not end the run
+        if j == 0 or self.db[j - 1] < threshold:
+            return None
+        limit = max(0, i - int(max_back * self.SR / self.HOP))
+        while j > limit and self.db[j - 1] >= threshold:
+            j -= 1
+        return j * self.HOP / self.SR if j > limit else None
 
     def next_onset_after(self, t: float, max_ahead: float) -> float:
         """Time speech next begins after a silence following t (capped at t + max_ahead)."""
@@ -295,6 +318,10 @@ def _repeats(heard: list[Heard], tokens: list[str]) -> list[tuple[float, float, 
         t = heard[j].start
         said = [tokens[i + k] for k in range(length) if canon[j + k] == tokens[i + k]]
         solid = len(said) >= REPEAT_MIN_WORDS and any(w not in FUNCTION_WORDS for w in said)
+        # "the best of the best": the script itself repeats these words, so hearing them twice
+        # is the sentence as written, not a retake.
+        if solid and _said_twice_in_script(tokens, said):
+            solid = False
         if solid and i < reached and i in first_time_at \
                 and t > first_time_at[i] + REPEAT_MIN_GAP_S:
             found.append((first_time_at[i], t, i, length))
@@ -302,6 +329,40 @@ def _repeats(heard: list[Heard], tokens: list[str]) -> list[tuple[float, float, 
             first_time_at.setdefault(i + k, heard[j + k].start)
         reached = max(reached, i + length)
     return found
+
+
+def _said_twice_in_script(tokens: list[str], said: list[str]) -> bool:
+    """True when the script contains the matched words (as a sequence, garbles skipped) twice."""
+    n = len(said)
+    hits = 0
+    for i in range(len(tokens) - n + 1):
+        window = tokens[i:i + n + 2]  # allow one or two skipped garbles between the words
+        k = 0
+        for w in window:
+            if k < n and w == said[k]:
+                k += 1
+        if k == n:
+            hits += 1
+    return hits >= 2
+
+
+def _script_indices(heard: list[Heard], tokens: list[str]) -> dict[int, int]:
+    """Heard-word index -> script index, for the words the greedy runs account for."""
+    out: dict[int, int] = {}
+    canon = _canonical(heard, tokens)
+    for j, i, length in _runs(canon, tokens):
+        for k in range(length):
+            if j + k < len(canon) and canon[j + k] == tokens[i + k]:
+                out[j + k] = i + k
+    return out
+
+
+def _excision_safe(p: list[Heard], tokens: list[str], a: float, b: float) -> bool:
+    """An excision [a, b) must not remove script words heard nowhere else in this hearing."""
+    idx = _script_indices(p, tokens)
+    inside = {i for j, i in idx.items() if a - 0.03 <= p[j].start < b}
+    outside = {i for j, i in idx.items() if not (a - 0.03 <= p[j].start < b)}
+    return inside <= outside
 
 
 def _attempt_start(heard: list[Heard], tokens: list[str], t: float) -> float:
@@ -390,9 +451,23 @@ def _foreign_lead(heard: list[Heard], tokens: list[str], words: list[Word]) -> f
     canon = _canonical(before, tokens)
     if any(c is not None for c in canon[-2:]):
         return None
+    if sum(c is not None for c in canon) * 2 > len(canon):
+        return None  # mostly the unit's own words: "it is not a special operations force but"
     if not all(_blank_raw(words, h.start) for h in before[-2:]):
         return None
     return t
+
+
+def _opens_well(heard: list[Heard], tokens: list[str], prev_tail: list[str]) -> bool:
+    """True when a hearing begins on the unit's first word, or on a garble of it: not on the
+    unit's second or third word, and not on the previous unit's last words."""
+    from rapidfuzz import fuzz
+    first = heard[0].norm
+    if fuzz.ratio(first, tokens[0]) >= 70:
+        return True
+    if any(fuzz.ratio(first, t) >= 80 for t in tokens[1:3]):
+        return False
+    return not any(fuzz.ratio(first, t) >= 75 for t in prev_tail)
 
 
 def _pick_restart(exact: list[float], fuzzy: list[float], energy: Energy, floor: float) -> float | None:
@@ -436,13 +511,26 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
     for k, d in enumerate(kept):
         span = words[d.word_start:d.word_end]
         tokens = d.sentence.tokens
+        # A restart whisper suppressed can collapse a sentence's timestamps into a couple of
+        # seconds, so the window ends long before the sentence does. Hear from the start up to the
+        # next unit and take the latest end at which the sentence is heard whole.
+        expected_s = len(tokens) / WORDS_PER_S
+        if d.runs is None and d.end - d.start < SHORT_SPAN_FACTOR * expected_s:
+            next_start = kept[k + 1].start if k + 1 < len(kept) else energy.duration
+            heard = prober.words(energy, d.start - 0.2, min(next_start - 0.05, d.start + 2 * expected_s + 20))
+            ends = [heard[e - 1].end for s, e, sc in _candidates(heard, d.sentence, 12, 65.0)
+                    if heard[e - 1].end > d.end + 0.5]
+            if ends:
+                d.end = max(ends)
+                d.runs = [(d.start, d.end)]
+                d.notes.append(f"end was collapsed: extended to {fmt_ts(d.end)}")
         runs_t = d.runs or _split_runs(words, d.word_start, d.word_end, max_gap_s)
         near = [w for w in words if d.start - 3.0 <= w.start <= d.end + 3.0]
 
         notes = []
         new_start = d.start
         excise = []
-        repeats = []          # (first, again, idx, n) seen inside one probe
+        repeats = []          # (first, again, idx, n, hearing) seen inside one probe
         exact, fuzzy = [], []  # restart sightings
         for r, (ra, rb) in enumerate(runs_t):
             base = prober.words(energy, ra - 0.25, min(rb + 0.3, ra + BASE_LEN_S))
@@ -457,7 +545,7 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                     if i <= RESTART_MAX_INDEX and n >= min(RESTART_MIN_WORDS, len(tokens)):
                         exact.append(_attempt_start(p, tokens, again))
                     else:
-                        repeats.append((first, again, i, n))
+                        repeats.append((first, again, i, n, p))
                 fuzzy += [t for t in _opening_again(p, tokens) if t < d.end - 0.3]
                 t = _foreign_lead(p, tokens, near)
                 if t is not None and t < d.end - 0.3:
@@ -469,7 +557,10 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                 if t_base is not None:
                     before = [h for h in base if h.start < t_base - 0.05]
                     foreign = len(before) >= 2 and \
-                        sum(c is not None for c in _canonical(before[-2:], tokens[:4])) <= 1
+                        sum(c is not None for c in _canonical(before[-2:], tokens[:4])) <= 1 and \
+                        sum(c is not None for c in _canonical(before, tokens)) * 2 <= len(before)
+                    # ("it is not a special operations force but" before a later "it" are the
+                    # unit's own words, not a fragment of a discarded attempt)
                     sightings = []
                     for q, q0 in [(base, ra - 0.25)] + list(zip(probes, _mid_starts(span, (ra, rb), energy, max_gap_s))):
                         tq = _first_word_at(q, tokens)
@@ -495,7 +586,7 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
         picked = _pick_restart(exact, fuzzy, energy, floor=prev_end + 0.05)
         if str(d.sentence.index) in _EXPLAIN:
             print(f"\n[explain #{d.sentence.index}] span {d.start:.2f}-{d.end:.2f} runs={[(round(a, 2), round(b, 2)) for a, b in runs_t]}")
-            print(f"  exact={[round(t, 2) for t in exact]} fuzzy={[round(t, 2) for t in fuzzy]} repeats={[(round(a, 2), round(b, 2), i, n) for a, b, i, n in repeats]} picked={picked}")
+            print(f"  exact={[round(t, 2) for t in exact]} fuzzy={[round(t, 2) for t in fuzzy]} repeats={[(round(a, 2), round(b, 2), i, n) for a, b, i, n, _ in repeats]} picked={picked}")
             for r, (ra, rb) in enumerate(runs_t):
                 base = prober.words(energy, ra - 0.25, min(rb + 0.3, ra + BASE_LEN_S))
                 print(f"  run{r} base: " + " ".join(f"{h.norm}@{h.start:.2f}" for h in base))
@@ -505,8 +596,9 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
         if picked is not None and picked > d.start + 0.3:
             new_start = picked
             notes.append(f"restart: kept attempt from {fmt_ts(new_start)}")
-        for first, again, i, n in repeats:
-            if i > RESTART_MAX_INDEX and first >= new_start and 0.5 <= again - first <= 6.0:
+        for first, again, i, n, p in repeats:
+            if i > RESTART_MAX_INDEX and first >= new_start and 0.5 <= again - first <= 6.0 \
+                    and _excision_safe(p, tokens, first, again - 0.03):
                 excise.append((first, again - 0.03))
         excise = _merge([(a, b) for a, b in excise if b - a >= 0.25 and a >= new_start])
         if excise:
@@ -530,6 +622,25 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                 if onset < new_start - 0.08:
                     notes.append(f"lead +{new_start - onset:.2f}s")
                     new_start = onset
+
+        # A cut must not fall inside a word. Whisper's timestamp for a short first word ("The",
+        # "Two", "Its") is often late, or the word is missing from the transcript altogether, and
+        # a cut placed on it opens on the word's tail. The sound tells: when the cut lies inside
+        # (or in a short dip just after) a run of loud frames that began shortly before (a word;
+        # a breath or room noise is far quieter), move it to the run's start, provided a hearing
+        # from there opens on the unit's first word or a garble of it, not on the previous unit's
+        # words, and does not say the opening twice (a discarded attempt). Hearings alone are not
+        # trusted for this: whisper drops a short first word that begins right at a slice's start,
+        # so "the hearing opens on the second word" is no proof that the word was cut.
+        prev_tail = kept[k - 1].sentence.tokens[-3:] if k else []
+        floor = prev_end + 0.05
+        run_start = energy.loud_run_start(new_start, CUT_RUN_BACK_S)
+        if run_start is not None and run_start - 0.03 >= floor and run_start < new_start - 0.05:
+            back = run_start - 0.03
+            again = prober.words(energy, back, back + CUT_CHECK_S)
+            if again and _opens_well(again, tokens, prev_tail) and not _opening_again(again, tokens):
+                notes.append(f"first word: cut pulled back {new_start - back:.2f}s")
+                new_start = back
 
         # Sanity floor: a span can lose retakes, not most of its words.
         kept_s = (d.end - new_start) - sum(b - a for a, b in excise)

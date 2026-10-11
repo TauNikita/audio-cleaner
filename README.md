@@ -31,7 +31,10 @@ one long word or as nothing at all — and the aligner would keep the whole stre
 repeats. The refine pass re-transcribes short pieces of audio in isolation, starting *inside* those
 spots, and keeps only the last attempt. A sentence the transcript lost altogether (re-read so often
 that whisper kept one garbled copy) is rescued by hearing the audio between its neighbours in
-isolation. `--verify` then checks every sentence of the
+isolation. Finally no cut may fall inside a word: a cut that lands in a word's sound is moved back
+to where that word begins. Repeats are judged against the script: words the script itself says twice
+("the best of the best") are not a retake, and a cut never removes words heard nowhere else.
+`--verify` then checks every sentence of the
 rendered file against the script and prints the ones worth a listen, with output timestamps.
 
 GPU transcription is not bit-for-bit deterministic, so two runs can place a cut a few tens of
