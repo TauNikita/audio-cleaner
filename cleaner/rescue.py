@@ -48,7 +48,7 @@ def rescue(decisions: list[Decision], words: list[Word], energy: Energy, prober:
            threshold: float, max_extra: int, low_delta: float = 12.0) -> int:
     """Re-place MISSING and LOW units from isolated hearings of the audio between their neighbours.
     Returns the number of units changed."""
-    todo = [k for k, d in enumerate(decisions) if d.status in (MISSING, LOW)]
+    todo = [k for k, d in enumerate(decisions) if d.status in (MISSING, LOW) and not d.locked]
     if not todo:
         return 0
     progress = Progress("Rescue")

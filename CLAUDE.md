@@ -40,7 +40,7 @@ script.txt ──► sentences ──► align each sentence to its last retake
 | `verify.py` | `--verify`: re-transcribe each kept sentence from the rendered output in isolation, compare with the script (fuzzy ratio, extra words, duration vs the speaker's own pace, stretched words) and print the rows worth a listen with output timestamps. |
 | `report.py` | Dry-run table + MISSING / low-confidence flags + fix hints. |
 | `assemble.py` | pydub cut/pad/pause/fade and export (format from extension). |
-| `cli.py` | argparse, lazy heavy-imports (so `--help` works with nothing installed), orchestration, temp cleanup. |
+| `cli.py` | `--overrides JSON` places named units by hand (explicit runs in seconds; `Decision.locked` keeps refine/rescue off them) for the rare take no heuristic can split, such as a sentence whose only complete reading is the first two words of one attempt plus the rest of another. argparse, lazy heavy-imports (so `--help` works with nothing installed), orchestration, temp cleanup. |
 | `util.py` | `fmt_ts()`, `Progress` (single-line progress for long stages). |
 
 `clean.py` is the thin entry point (`python clean.py ...` / `uv run clean.py ...`).

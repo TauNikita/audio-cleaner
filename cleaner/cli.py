@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-refine", action="store_true",
                    help="skip the listening passes: the rescue of units the transcript could not "
                         "place and the hidden-retake pass inside each chosen span")
+    p.add_argument("--overrides", metavar="JSON",
+                   help="hand placements for stubborn units: a JSON object mapping unit number to "
+                        "{\"runs\": [[start, end], ...]} in seconds of the recording; those units "
+                        "are cut exactly so and skipped by the listening passes")
     p.add_argument("--verify", action="store_true",
                    help="after rendering, re-transcribe each sentence from the output and flag "
                         "any that do not match the script or run long")
@@ -141,6 +145,20 @@ def main(argv: list[str] | None = None) -> int:
             from .hidden import Energy, Prober, refine
             energy = Energy(wav_path)
             prober = Prober(tr._load_model(args.model, args.device, args.compute_type), args.language)
+        if args.overrides:
+            import json
+            from .align import MATCH
+            with open(args.overrides, "r", encoding="utf-8") as fh:
+                overrides = json.load(fh)
+            for key, spec in overrides.items():
+                d = decisions[int(key) - 1]
+                runs = [(float(a), float(b)) for a, b in spec["runs"]]
+                d.start, d.end, d.runs, d.locked = runs[0][0], runs[-1][1], runs, True
+                d.status, d.score, d.excise = MATCH, 100.0, []
+                d.notes.append("placed by hand (--overrides)")
+                if d.word_start is None:
+                    d.word_start = d.word_end = next((i for i, w in enumerate(words) if w.start >= d.start), len(words))
+            print(f"Overrides: {len(overrides)} unit(s) placed by hand.")
         if refine_on:
             from .rescue import rescue
             rescue(decisions, words, energy, prober, threshold=args.threshold, max_extra=args.max_extra)

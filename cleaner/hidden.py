@@ -509,6 +509,10 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
     changed = 0
     prev_end = 0.0
     for k, d in enumerate(kept):
+        if d.locked:
+            prev_end = d.end
+            progress.update(f"{k + 1}/{len(kept)} spans — {changed} adjusted, {prober.calls} probes")
+            continue
         span = words[d.word_start:d.word_end]
         tokens = d.sentence.tokens
         # A restart whisper suppressed can collapse a sentence's timestamps into a couple of

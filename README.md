@@ -190,6 +190,7 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 | `--clauses` | off | Align clauses instead of whole sentences (more cuts; may clip word endings) |
 | `--no-refine` | off | Skip the hidden-retake pass (re-listening inside each pick) |
 | `--verify` | off | After rendering, re-transcribe each sentence from the output and flag mismatches |
+| `--overrides` | none | JSON `{"63": {"runs": [[1436.2, 1437.5], [1444.15, 1447.95]]}}`: cut unit 63 from exactly these stretches of the recording (seconds), skipping the listening passes for it |
 | `--model` | `small.en` | faster-whisper model |
 | `--language` | `en` | Spoken language |
 | `--device` | `auto` | `auto` (GPU if available, else CPU), `cpu`, or `cuda` |

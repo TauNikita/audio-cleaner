@@ -35,6 +35,7 @@ class Decision:
     excise: list = field(default_factory=list)  # (start, end) seconds dropped inside the span
     notes: list = field(default_factory=list)   # what hidden.refine() changed, for the report
     runs: list | None = None  # (start, end) runs to cut, when the transcript words cannot say
+    locked: bool = False      # placed by hand (--overrides): the listening passes leave it alone
 
 
 # Scores at or above threshold + GOOD_MARGIN are treated as equally good, so the later take wins;
