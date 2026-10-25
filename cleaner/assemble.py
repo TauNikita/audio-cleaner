@@ -226,9 +226,9 @@ class _Fine:
         return self.t(i0 + g)
 
     def quiet_stretches(self, a: float, b: float, min_s: float) -> list[tuple[float, float]]:
-        """Quiet runs of at least min_s that begin and end inside (a, b), as (start, end) seconds.
-        A quiet already running at a (dead air before an early first-word timestamp) is not one: the
-        lead scan deals with it."""
+        """Quiet runs of at least min_s that end inside (a, b), as (start, end) seconds; a quiet
+        already running at a is reported from a (the caller trims it: dead air before an early
+        first-word timestamp)."""
         i, j = self.f(a), self.f(b) - 1
         out = []
         g = i
@@ -239,7 +239,7 @@ class _Fine:
             qa = g
             while g < j and not self.loud[g]:
                 g += 1
-            if qa > i and g < j and self.t(g) - self.t(qa) >= min_s:
+            if g < j and self.t(g) - self.t(qa) >= min_s:
                 out.append((self.t(qa), self.t(g)))
         return out
 
@@ -326,10 +326,18 @@ def _split_inner(pieces: list[tuple[float, float, bool, bool]], fine: _Fine,
     for pa, pb, hs, he in pieces:
         cur_a, cur_hs = pa, hs
         for qa, qb in fine.quiet_stretches(pa, pb, min_s):
+            if qa <= cur_a + 0.05:
+                # Dead air at the piece's own start (a restart or first-word timestamp placed in the
+                # silence before the words), or a stub of a few ms before it (the tail of the previous
+                # unit's last word, when a start was clamped to that unit's end): the piece simply
+                # begins where its own sound does.
+                cur_a = qb
+                continue
             out.append((cur_a, qa, cur_hs, False))
             cur_a, cur_hs = qb, False
             cuts += 1
-        out.append((cur_a, pb, cur_hs, he))
+        if pb - cur_a > 0.05:
+            out.append((cur_a, pb, cur_hs, he))
     return out, cuts
 
 
@@ -472,8 +480,18 @@ def assemble(media: str, decisions: list[Decision], words: list[Word], output: s
     prev_tail_room_ms = 0
     hard_joins = in_sound = 0
     unit_entry = None
+    skipped: set[int] = set()
     for k, (i, j, (pa, pb, hard_start, hard_end)) in enumerate(plan):
         d = kept[i]
+        if 0 <= prev_cut_end - pb + 0.05 < 1.5 and pb <= prev_cut_end + 0.05:
+            # The whole piece lies inside the previous piece's cut (a start placed on the previous
+            # unit's last word): nothing of it is new sound.
+            dropped.append(dict(unit=d.sentence.index, src_start=round(pa, 3), src_end=round(pb, 3),
+                                reason="inside the previous piece's cut"))
+            skipped.add(k)
+            continue
+        if j > 0 and all(kk in skipped for kk in range(k - j, k)):
+            j = 0   # every earlier piece of this unit was dropped: this one opens the unit
         next_src = plan[k + 1][2][0] if k + 1 < len(plan) else None
         e = _edges(fine, pa, pb, hard_start, hard_end, prev_cut_end, next_src,
                    lead_ms / 1000.0, tail_ms / 1000.0, tail_max_ms / 1000.0, hard_fade_ms)
