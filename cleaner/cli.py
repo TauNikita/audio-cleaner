@@ -19,7 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("media", help="input recording (audio or video)")
     p.add_argument("script", help="script as a .txt file")
     p.add_argument("-o", "--output", default="clean.wav",
-                   help="output audio file; format inferred from extension (default: clean.wav)")
+                   help="output audio file; format inferred from extension (default: clean.wav); "
+                        "the cuts are logged next to it as <output>.cuts.json")
     p.add_argument("--dry-run", action="store_true",
                    help="align and print the report only; write no audio")
     p.add_argument("--clauses", action="store_true",
@@ -56,22 +57,31 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--horizon", type=int, default=None,
                    help="max words to scan ahead per sentence (default: unlimited)")
 
-    g = p.add_argument_group("assembly (ms)")
-    g.add_argument("--pad", type=int, default=60, help="padding added to each cut edge (default: 60)")
-    g.add_argument("--tail-pad", type=int, default=600,
-                   help="max audio kept past a sentence's last word while extending to the natural "
-                        "quiet point, so the decay ends in silence not a clip (default: 600)")
-    g.add_argument("--clause-pause", type=int, default=120,
-                   help="silence between clauses of one sentence (default: 120)")
-    g.add_argument("--sentence-pause", type=int, default=176,
-                   help="silence between sentences (default: 176)")
-    g.add_argument("--paragraph-pause", type=int, default=176,
-                   help="silence between paragraphs (default: 176)")
-    g.add_argument("--crossfade", type=int, default=15,
-                   help="fade at each cut edge to avoid clicks (default: 15)")
+    g = p.add_argument_group("assembly (ms)",
+                             "Pieces are cut at their audible edges. A pause is the silence heard between "
+                             "two pieces, from the last sound of one to the first sound of the next.")
+    g.add_argument("--sentence-pause", type=int, default=600,
+                   help="pause heard between sentences (default: 600)")
+    g.add_argument("--paragraph-pause", type=int, default=600,
+                   help="pause heard between paragraphs (default: 600)")
+    g.add_argument("--clause-pause", type=int, default=300,
+                   help="pause heard inside a sentence: between clauses (--clauses), at a shortened "
+                        "inner pause and at a join where a retake was cut out (default: 300)")
+    g.add_argument("--lead", type=int, default=100,
+                   help="room kept before a piece's first sound (default: 100)")
+    g.add_argument("--tail", type=int, default=80,
+                   help="room kept after a piece's last sound has died down (default: 80)")
+    g.add_argument("--tail-max", type=int, default=900,
+                   help="how far past the last word's timestamp the sound may run on before the "
+                        "cut is forced (default: 900)")
+    g.add_argument("--max-inner-pause", type=int, default=700,
+                   help="a silence inside a sentence longer than this is shortened to the clause "
+                        "pause; 0 keeps every inner pause as recorded (default: 700)")
     g.add_argument("--max-internal-gap", type=int, default=1200,
-                   help="excise silence/retake audio inside a matched span when the gap between "
-                        "consecutive words exceeds this (default: 1200)")
+                   help="a gap between consecutive transcript words longer than this splits the "
+                        "span, dropping the dead air or retake in between (default: 1200)")
+    g.add_argument("--hard-fade", type=int, default=40,
+                   help="fade at a cut that has to land in running speech (default: 40)")
     return p
 
 
@@ -106,14 +116,13 @@ def main(argv: list[str] | None = None) -> int:
 
     cache_path = args.cache or tr.default_cache_path(args.media, args.model)
 
-    # The 16kHz WAV exists only to feed Whisper; rendering cuts from the original media. So extract
-    # it only for a re-transcribe (cache miss or --refresh); a warm cache touches neither ffmpeg nor
-    # Whisper, even on a full render.
+    # The 16kHz WAV feeds Whisper, the listening passes and the edge finder of the assembly;
+    # rendering cuts from the original media. A warm cache on a dry run touches neither ffmpeg nor
+    # Whisper.
     need_transcribe = args.refresh or tr.load_cache(
         cache_path, args.media, args.model, args.language) is None
     refine_on = not args.no_refine
-    # The refine and verify passes listen to the audio again, so they need the 16kHz WAV too.
-    need_wav = need_transcribe or refine_on or args.verify
+    need_wav = need_transcribe or refine_on or args.verify or not args.dry_run
 
     wav_path = None
     is_temp_wav = False
@@ -169,12 +178,15 @@ def main(argv: list[str] | None = None) -> int:
             print("Dry run: no audio written. Re-run without --dry-run to render.")
             return 0
 
+        if energy is None:
+            from .hidden import Energy
+            energy = Energy(wav_path)
         from .assemble import assemble
-        positions = assemble(args.media, decisions, words, args.output, pad_ms=args.pad,
-                             tail_pad_ms=args.tail_pad, sentence_pause_ms=args.sentence_pause,
-                             paragraph_pause_ms=args.paragraph_pause, crossfade_ms=args.crossfade,
-                             max_internal_gap_ms=args.max_internal_gap, energy=energy,
-                             clause_pause_ms=args.clause_pause)
+        positions = assemble(args.media, decisions, words, args.output, energy,
+                             lead_ms=args.lead, tail_ms=args.tail, tail_max_ms=args.tail_max,
+                             sentence_pause_ms=args.sentence_pause, paragraph_pause_ms=args.paragraph_pause,
+                             clause_pause_ms=args.clause_pause, max_internal_gap_ms=args.max_internal_gap,
+                             max_inner_pause_ms=args.max_inner_pause, hard_fade_ms=args.hard_fade)
         if args.verify:
             from .audio import extract_wav
             from .verify import verify

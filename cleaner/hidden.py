@@ -65,6 +65,9 @@ LEAD_SILENCE_S = 0.2       # ...but only to an onset preceded by real silence
 LEAD_UNCONFIRMED_S = 0.5   # ...and, when the first word cannot be confirmed, only this far
 CUT_CHECK_S = 2.5          # hear this much from a moved cut to confirm it opens on the first word
 CUT_RUN_BACK_S = 1.0       # a cut inside a word moves to the word's start if it is this near
+GAP_HEAR_AFTER_S = 0.3     # a gap between two runs is heard from this long after the first run's last
+                           # word timestamp (its sound runs on past the timestamp)
+GAP_RESTART_MIN_S = 0.5    # ...and a restart counts only this far into the gap
 
 
 class Energy:
@@ -536,6 +539,7 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
         excise = []
         repeats = []          # (first, again, idx, n, hearing) seen inside one probe
         exact, fuzzy = [], []  # restart sightings
+        run_starts = {}       # later runs whose first word is heard before its timestamp
         for r, (ra, rb) in enumerate(runs_t):
             base = prober.words(energy, ra - 0.25, min(rb + 0.3, ra + BASE_LEN_S))
             probes = [prober.words(energy, t, min(rb + 0.3, t + PROBE_LEN_S))
@@ -579,6 +583,16 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                 t = _opening_run(base, tokens)
                 if t is not None:
                     exact.append(t)
+            # A later run whose first words whisper timed late: the hearing from a second before
+            # the run's start opens on the run's first transcript word earlier than the timestamp
+            # says, inside running speech. Start the run there (the sound tells the exact onset).
+            if r > 0 and not d.locked:
+                run_words = [w.norm for w in span if w.start >= ra - 1e-6][:4]
+                hearing = prober.words(energy, ra - 1.2, ra + 1.5)
+                t_open = _first_word_at(hearing, run_words) if run_words else None
+                if t_open is not None and runs_t[r - 1][1] + 0.05 < t_open < ra - 0.08 \
+                        and energy.speech_fraction(t_open, ra) >= 0.5:
+                    run_starts[r] = t_open - 0.04
             # A probe that hears the unit's beginning inside speech the transcript never saw.
             for p in probes:
                 if not p or not _blank_raw(near, p[0].start):
@@ -586,6 +600,26 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                 t = _hidden_attempt(p, tokens)
                 if t is not None and d.start + 0.3 < t < d.end - 0.3:
                     exact.append(t)
+        # Speech the transcript skipped between two runs of the span (a gap longer than max_gap_s
+        # with sound in it): whisper may have suppressed a whole re-reading there as repeated text,
+        # so the span would glue the first attempt's opening to the retake's end. Hear the gap; if
+        # the unit opens again inside it, that reading is the take, cut whole from there.
+        for (ra0, rb0), (ra1, rb1) in zip(runs_t, runs_t[1:]):
+            if d.locked or energy.speech_fraction(rb0, ra1) < GAP_SPEECH_FRACTION:
+                continue
+            # The hearing starts past the previous run's last word (its timestamp ends before its
+            # sound does; a slice opening inside a word yields a garble that can pass for the
+            # opening), and a restart counts only when heard well inside the gap, never as the
+            # slice's pinned first word.
+            t0 = rb0 + GAP_HEAR_AFTER_S
+            hearing = prober.words(energy, t0, min(ra1 + 1.0, t0 + BASE_LEN_S))
+            lo_t, hi_t = max(rb0 + GAP_RESTART_MIN_S, t0 + 0.2), ra1 + 0.5
+            for t in (_opening_run(hearing, tokens), _hidden_attempt(hearing, tokens) if hearing else None):
+                if t is not None and lo_t < t < hi_t:
+                    exact.append(t)
+            # The opening said again later in the same hearing (an aborted "Since then—" before the
+            # reading that carries on): the latest attempt is the take.
+            fuzzy += [t for t in _opening_again(hearing, tokens) if lo_t < t < hi_t]
 
         picked = _pick_restart(exact, fuzzy, energy, floor=prev_end + 0.05)
         if str(d.sentence.index) in _EXPLAIN:
@@ -597,9 +631,19 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
                 for t0 in _mid_starts(span, (ra, rb), energy, max_gap_s):
                     p0 = prober.words(energy, t0, min(rb + 0.3, t0 + PROBE_LEN_S))
                     print(f"  mid@{t0:.2f}: " + " ".join(f"{h.norm}@{h.start:.2f}" for h in p0)[:220])
+        new_runs = None
         if picked is not None and picked > d.start + 0.3:
             new_start = picked
             notes.append(f"restart: kept attempt from {fmt_ts(new_start)}")
+            if d.runs is None and any(rb < new_start < ra for (_, rb), (ra, _) in zip(runs_t, runs_t[1:])):
+                # The kept reading begins inside speech the transcript skipped: its words up to the
+                # next run are not in the transcript, so the span is cut whole from the restart.
+                new_runs = [(new_start, d.end)]
+                notes.append("reading hidden by the transcript: cut whole")
+        elif run_starts:
+            new_runs = [(run_starts.get(r, ra), rb) for r, (ra, rb) in enumerate(runs_t)]
+            notes.append("run starts heard earlier: " + ", ".join(
+                f"{fmt_ts(runs_t[r][0])} -> {fmt_ts(t)}" for r, t in sorted(run_starts.items())))
         for first, again, i, n, p in repeats:
             if i > RESTART_MAX_INDEX and first >= new_start and 0.5 <= again - first <= 6.0 \
                     and _excision_safe(p, tokens, first, again - 0.03):
@@ -656,6 +700,8 @@ def refine(decisions: list[Decision], words: list[Word], energy: Energy, prober:
 
         if notes:
             d.start, d.excise, d.notes = new_start, excise, notes
+            if new_runs is not None:
+                d.runs = new_runs
             changed += 1
         prev_end = d.end
         progress.update(f"{k + 1}/{len(kept)} spans — {changed} adjusted, {prober.calls} probes")

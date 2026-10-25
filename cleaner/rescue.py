@@ -101,6 +101,7 @@ def rescue(decisions: list[Decision], words: list[Word], energy: Energy, prober:
         # The hearing's timestamp for the first word jitters by a few tenths; snap the start to
         # the silence (or breath) before the reading, as a restart boundary is.
         start = _pick_restart([start], [], energy, floor=a) or start
+        start = max(start, a)   # never before the previous unit's end: its tail would be heard twice
         was = "missing" if d.status == MISSING else f"low ({d.score:.0f})"
         d.start, d.end, d.score, d.status = start, end, score, status
         d.word_start, d.word_end = _word_range(words, start, end)

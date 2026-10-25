@@ -4,9 +4,9 @@ Turn a messy voiceover recording into a clean read that follows a written script
 
 You record narration with pauses, false starts, and retakes. This tool transcribes the recording
 with word-level timestamps, aligns each script sentence to the **last good take** of that sentence
-in the audio, and stitches the chosen pieces together with short pauses between sentences and
-paragraphs. `--clauses` aligns at commas, semicolons, colons and dashes instead, which picks up a
-retake from the last comma but adds cuts that can clip word endings.
+in the audio, cuts every take at its audible edges and stitches the pieces together with pauses of
+a fixed, audible length between sentences and paragraphs. `--clauses` aligns at commas, semicolons,
+colons and dashes instead, which picks up a retake from the last comma but adds cuts inside sentences.
 
 Crucially, it lets you **review every pick before any audio is rendered** (`--dry-run`).
 
@@ -21,7 +21,7 @@ script.txt ──► sentences ──► place every sentence, in order, on its 
                                           │
                    listen again inside each pick for retakes whisper hid
                                           │
-                          cut + concat with pauses ──► clean.wav
+                 cut at the audible edges + concat with pauses ──► clean.wav (+ clean.cuts.json)
                                           │
                      --verify: re-transcribe the output, sentence by sentence
 ```
@@ -40,6 +40,35 @@ rendered file against the script and prints the ones worth a listen, with output
 GPU transcription is not bit-for-bit deterministic, so two runs can place a cut a few tens of
 milliseconds apart; the boundaries are snapped to silences (or the breath between two readings) so
 that this jitter never lands inside a word.
+
+## Edges and pauses
+
+Whisper's timestamps are not where the sound is: a word's end timestamp comes a median 180 ms
+before its sound has died away, and a first word's start lands early or late by a hundred ms or
+more. Cutting at the timestamps clips word endings and leaves uneven dead air. So every piece is
+cut at its **audible edges**, measured on the 16 kHz track against the recording's noise floor:
+
+- the tail runs on from the last word until the sound has settled for good — a quiet of at least
+  180 ms, longer than the closure before a final "t" or the dip before a trailing "s" (those stay
+  under ~120 ms) — and keeps `--tail` (80 ms) of room after it, so the decay is never clipped; a
+  last-word timestamp that already sits in the quiet (the VAD's padding runs long) is walked back to
+  the sound it belongs to;
+- the lead keeps `--lead` (100 ms) of room before the first sound that is speech — a breath or a
+  click a few dB over the floor is not —: an early timestamp's dead air (up to 1.2 s of VAD padding)
+  is trimmed, a late one is moved back to the word's start when a clean onset is there; a "word" of a
+  few ms at a segment start with no sound anywhere near it is a transcript artifact and is dropped;
+- a **pause is what you hear**: `--sentence-pause` / `--paragraph-pause` (600 ms) and
+  `--clause-pause` (300 ms) are the silence from the last sound of one piece to the first sound of
+  the next. The room the pieces kept counts towards it and only the remainder is inserted, so every
+  pause comes out the same length whatever the takes' own room was.
+
+A silence inside a sentence longer than `--max-inner-pause` (700 ms, the speaker finding the line)
+is shortened to the clause pause. Where a retake was cut out of the middle of a sentence, or where
+the stretches of a hand-placed unit (`--overrides`) end, speech may run straight through the join;
+such a cut lands at the quietest moment next to the boundary with a `--hard-fade` (40 ms), and never
+reaches back into the stretch that was cut out. No audio is ever heard twice: a piece whose
+timestamp falls inside the previous piece's cut starts after that cut. Every piece is logged in `<output>.cuts.json` (source and output times, the
+edges found, the room kept, the silence inserted) so the joins can be audited or listened to.
 
 ## From scratch on a new machine
 
@@ -198,11 +227,15 @@ the DLLs on `PATH` or next to `clean.py`. For lower VRAM use `--compute-type int
 | `--threshold` | `82` | Min fuzzy match score (0-100) to accept a take |
 | `--max-extra` | `3` | Extra words to try beyond sentence length when matching |
 | `--horizon` | unlimited | Max words to scan ahead per sentence |
-| `--pad` | `60` | Padding (ms) added to each cut edge |
-| `--clause-pause` | `120` | Silence (ms) between clauses of one sentence (`--clauses` only) |
-| `--sentence-pause` | `176` | Silence (ms) between sentences |
-| `--paragraph-pause` | `176` | Silence (ms) between paragraphs |
-| `--crossfade` | `15` | Crossfade (ms) at each join |
+| `--sentence-pause` | `600` | Pause heard between sentences (ms): last sound to first sound |
+| `--paragraph-pause` | `600` | Pause heard between paragraphs (ms) |
+| `--clause-pause` | `300` | Pause heard inside a sentence (ms): between clauses (`--clauses`), at a shortened inner pause, at a join where a retake was cut out |
+| `--lead` | `100` | Room kept before a piece's first sound (ms) |
+| `--tail` | `80` | Room kept after a piece's last sound has died down (ms) |
+| `--tail-max` | `900` | How far past the last word's timestamp the sound may run on before the cut is forced (ms) |
+| `--max-inner-pause` | `700` | A silence inside a sentence longer than this (ms) is shortened to the clause pause; `0` keeps every inner pause |
+| `--max-internal-gap` | `1200` | A gap between consecutive transcript words longer than this (ms) splits the span, dropping the dead air or retake in between |
+| `--hard-fade` | `40` | Fade (ms) at a cut that has to land in running speech |
 | `--cache` | auto | Transcript cache path |
 | `--refresh` | off | Ignore the cache and re-transcribe |
 
